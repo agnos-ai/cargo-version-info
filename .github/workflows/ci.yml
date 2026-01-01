@@ -81,6 +81,7 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
       - name: Run doc tests
+        shell: bash
         run: |
           # Only run doc tests if the package has a library target
           if cargo metadata --format-version 1 --no-deps | grep -q '"lib"'; then
