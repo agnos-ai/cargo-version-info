@@ -23,5 +23,5 @@ chore = { changelog_title = "Miscellaneous Chores", omit_from_changelog = true }
 revert = { changelog_title = "Reverts" }
 
 [bump_profiles.default]
-pre_bump_hooks = ["cargo bump {{version}}"]
+pre_bump_hooks = ["cargo bump {{version}}", "git add Cargo.toml Cargo.lock"]
 post_bump_hooks = ["cargo update --workspace"]
