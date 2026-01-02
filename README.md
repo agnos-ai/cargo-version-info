@@ -187,10 +187,13 @@ NEXT_VERSION := $(shell cargo version-info next --format version)
 Can be called from `build.rs`:
 
 ```rust
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 let output = std::process::Command::new("cargo")
     .args(["version-info", "current", "--format", "version"])
     .output()?;
 let version = String::from_utf8(output.stdout)?;
+# Ok(())
+# }
 ```
 
 ## Integration with Existing Workflows

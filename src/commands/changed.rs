@@ -89,14 +89,14 @@ pub struct ChangedArgs {
 ///     ChangedArgs,
 ///     changed,
 /// };
-///
-/// let args = ChangedArgs {
-///     manifest: "./Cargo.toml".into(),
-///     repo_path: ".".into(),
-///     format: "bool".to_string(),
-///     github_output: None,
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = ChangedArgs::parse_from(&["cargo", "version-info", "changed"]);
 /// changed(args)?; // Prints "true" or "false"
+///
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

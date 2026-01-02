@@ -105,15 +105,13 @@ pub struct PreBumpHookArgs {
 ///     PreBumpHookArgs,
 ///     pre_bump_hook,
 /// };
-///
-/// let args = PreBumpHookArgs {
-///     manifest: "./Cargo.toml".into(),
-///     repo_path: ".".into(),
-///     target_version: Some("1.0.0".to_string()),
-///     current_version: None,
-///     exit_on_error: true,
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = PreBumpHookArgs::parse_from(&["cargo", "version-info", "pre-bump-hook"]);
 /// pre_bump_hook(args)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

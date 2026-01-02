@@ -61,12 +61,13 @@ pub struct RustToolchainArgs {
 ///     RustToolchainArgs,
 ///     rust_toolchain,
 /// };
-///
-/// let args = RustToolchainArgs {
-///     toolchain_file: "./.rust-toolchain.toml".into(),
-///     format: "version".to_string(),
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = RustToolchainArgs::parse_from(&["cargo", "version-info", "rust-toolchain"]);
 /// rust_toolchain(args)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

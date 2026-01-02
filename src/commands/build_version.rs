@@ -27,8 +27,11 @@
 //! BUILD_VERSION=1.2.3 cargo version-info build-version
 //! ```
 
-use std::env;
 use std::path::PathBuf;
+use std::{
+    env,
+    fs,
+};
 
 use anyhow::{
     Context,
@@ -122,16 +125,13 @@ pub struct BuildVersionArgs {
 ///     BuildVersionArgs,
 ///     build_version,
 /// };
-///
-/// let args = BuildVersionArgs {
-///     owner: None,
-///     repo: None,
-///     github_token: None,
-///     manifest: "./Cargo.toml".into(),
-///     repo_path: ".".into(),
-///     format: "version".to_string(),
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = BuildVersionArgs::parse_from(&["cargo", "version-info", "build-version"]);
 /// build_version(args)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output
@@ -191,13 +191,21 @@ pub fn build_version(args: BuildVersionArgs) -> Result<()> {
         }
     }
 
-    // Fall back to CARGO_PKG_VERSION (from Cargo.toml)
-    if let Ok(version) = env::var("CARGO_PKG_VERSION") {
-        let trimmed = version.trim();
+    // Fall back to manifest version (from Cargo.toml), optionally append SHA if
+    // available
+    if let Some(manifest_version) = read_manifest_version(&args.manifest) {
+        let trimmed = manifest_version.trim();
         if !trimmed.is_empty() && trimmed != "0.0.0" {
+            let version_with_sha = short_sha(&args.repo_path)
+                .map(|sha| format!("{trimmed}-{sha}"))
+                .unwrap_or_else(|| trimmed.to_string());
+
             match args.format.as_str() {
-                "version" => println!("{}", version),
-                "json" => println!("{{\"version\":\"{}\",\"source\":\"cargo_toml\"}}", version),
+                "version" => println!("{version_with_sha}"),
+                "json" => println!(
+                    "{{\"version\":\"{}\",\"source\":\"cargo_toml\"}}",
+                    version_with_sha
+                ),
                 _ => anyhow::bail!("Invalid format: {}", args.format),
             }
             return Ok(());
@@ -230,6 +238,125 @@ pub fn build_version(args: BuildVersionArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Compute the build version using default arguments (local repo, version
+/// output).
+pub fn build_version_default() -> Result<()> {
+    build_version_for_repo(".")
+}
+
+/// Compute the build version for a specific repository path.
+pub fn build_version_for_repo(repo_path: impl Into<PathBuf>) -> Result<()> {
+    let repo_root: PathBuf = repo_path.into();
+    let manifest = repo_root.join("Cargo.toml");
+
+    build_version(BuildVersionArgs {
+        owner: None,
+        repo: None,
+        github_token: None,
+        manifest,
+        repo_path: repo_root,
+        format: "version".to_string(),
+    })
+}
+
+/// Compute the build version string for use in build.rs scripts.
+///
+/// This function implements the same priority logic as `build_version` but
+/// returns the version string instead of printing it. Use this in `build.rs` to
+/// set `CARGO_PKG_VERSION`:
+///
+/// ```no_run
+/// use cargo_version_info::commands::compute_version_string;
+///
+/// if let Ok(version) = compute_version_string(".") {
+///     println!("cargo:rustc-env=CARGO_PKG_VERSION={}", version);
+/// }
+/// ```
+///
+/// # Priority Order
+///
+/// 1. **BUILD_VERSION** environment variable
+/// 2. **CARGO_PKG_VERSION_OVERRIDE** environment variable
+/// 3. **GitHub API** (only in GitHub Actions)
+/// 4. **Manifest version** (from Cargo.toml) + git SHA if available
+/// 5. **Git SHA** fallback: `0.0.0-dev-<short-sha>`
+pub fn compute_version_string(repo_path: impl Into<PathBuf>) -> Result<String> {
+    let repo_root: PathBuf = repo_path.into();
+    let manifest = repo_root.join("Cargo.toml");
+
+    // Try explicit overrides first (CI workflow should set BUILD_VERSION)
+    let env_version = ["BUILD_VERSION", "CARGO_PKG_VERSION_OVERRIDE"]
+        .into_iter()
+        .find_map(|key| env::var(key).ok())
+        .filter(|v| !v.trim().is_empty());
+
+    if let Some(version) = env_version {
+        return Ok(version);
+    }
+
+    // Fallback: Try to query GitHub API via octocrab
+    let is_github_actions = env::var("GITHUB_ACTIONS").is_ok();
+    if is_github_actions {
+        let (owner, repo) = get_owner_repo(None, None)?;
+        let github_token = None::<String>;
+
+        let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
+        if let Ok((_, next)) = rt.block_on(github::calculate_next_version(
+            &owner,
+            &repo,
+            github_token.as_deref(),
+        )) {
+            return Ok(next);
+        }
+    }
+
+    // Fall back to manifest version (from Cargo.toml), optionally append SHA if
+    // available
+    if let Some(manifest_version) = read_manifest_version(&manifest) {
+        let trimmed = manifest_version.trim();
+        if !trimmed.is_empty() && trimmed != "0.0.0" {
+            let version_with_sha = short_sha(&repo_root)
+                .map(|sha| format!("{trimmed}-{sha}"))
+                .unwrap_or_else(|| trimmed.to_string());
+            return Ok(version_with_sha);
+        }
+    }
+
+    // Final fallback: git SHA for local dev
+    let repo = gix::discover(&repo_root).with_context(|| {
+        format!(
+            "Failed to discover git repository at {}",
+            repo_root.display()
+        )
+    })?;
+
+    let head = repo.head().context("Failed to read HEAD")?;
+    let commit_id = head.id().context("HEAD does not point to a commit")?;
+    let short_sha = commit_id
+        .shorten()
+        .context("Failed to shorten commit SHA")?;
+
+    Ok(format!("0.0.0-dev-{}", short_sha))
+}
+
+fn short_sha(repo_path: &PathBuf) -> Option<String> {
+    let repo = gix::discover(repo_path).ok()?;
+    let head = repo.head().ok()?;
+    let commit_id = head.id()?;
+    let short = commit_id.shorten().ok()?;
+    Some(short.to_string())
+}
+
+fn read_manifest_version(manifest: &PathBuf) -> Option<String> {
+    let contents = fs::read_to_string(manifest).ok()?;
+    let value: toml::Value = toml::from_str(&contents).ok()?;
+    value
+        .get("package")
+        .and_then(|pkg| pkg.get("version"))
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string)
 }
 
 #[cfg(test)]

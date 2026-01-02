@@ -62,13 +62,14 @@ pub struct CompareArgs {
 ///     CompareArgs,
 ///     compare,
 /// };
-///
-/// let args = CompareArgs {
-///     version1: "0.2.0".to_string(),
-///     version2: "0.1.0".to_string(),
-///     format: "bool".to_string(),
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = CompareArgs::parse_from(&["cargo", "version-info", "compare", "0.2.0", "0.1.0"]);
 /// compare(args)?; // Prints "true"
+///
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

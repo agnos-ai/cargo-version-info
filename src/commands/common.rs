@@ -63,42 +63,24 @@ pub fn get_owner_repo(owner: Option<String>, repo: Option<String>) -> Result<(St
 
 /// Extract version from `[workspace.package]` section.
 pub fn extract_workspace_version(content: &str) -> Option<String> {
-    // Simple regex-like parsing for [workspace.package] version
-    let workspace_section_start = content.find("[workspace.package]")?;
-    let workspace_section = &content[workspace_section_start..];
-
-    // Find version = "..." or version = { workspace = true }
-    for line in workspace_section.lines() {
-        if let Some(version_start) = line.find("version") {
-            let after_version = &line[version_start + 7..];
-            if let Some(quote_start) = after_version.find('"') {
-                let version_content = &after_version[quote_start + 1..];
-                if let Some(quote_end) = version_content.find('"') {
-                    return Some(version_content[..quote_end].to_string());
-                }
-            }
-        }
-    }
-
-    None
+    let parsed: toml::Value = toml::from_str(content).ok()?;
+    parsed
+        .get("workspace")?
+        .get("package")?
+        .get("version")?
+        .as_str()
+        .map(ToString::to_string)
 }
 
 /// Extract version from `[package]` section.
 pub fn extract_package_version(content: &str) -> Result<String> {
-    // Simple parsing for version = "..."
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("version")
-            && let Some(quote_start) = trimmed.find('"')
-        {
-            let after_quote = &trimmed[quote_start + 1..];
-            if let Some(quote_end) = after_quote.find('"') {
-                return Ok(after_quote[..quote_end].to_string());
-            }
-        }
-    }
-
-    anyhow::bail!("No version found in `[package]` section");
+    let parsed: toml::Value = toml::from_str(content).context("Failed to parse Cargo.toml")?;
+    parsed
+        .get("package")
+        .and_then(|pkg| pkg.get("version"))
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string)
+        .context("No version found in `[package]` section")
 }
 
 #[cfg(test)]

@@ -59,12 +59,14 @@ pub struct TagArgs {
 ///     TagArgs,
 ///     tag,
 /// };
-///
-/// let args = TagArgs {
-///     version: "0.1.2".to_string(),
-///     format: "tag".to_string(),
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = TagArgs::parse_from(&["cargo", "version-info", "tag", "0.1.2"]);
 /// tag(args)?; // Prints "v0.1.2"
+///
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

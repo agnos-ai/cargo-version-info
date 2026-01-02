@@ -76,13 +76,13 @@ pub struct CurrentArgs {
 ///     CurrentArgs,
 ///     current,
 /// };
-///
-/// let args = CurrentArgs {
-///     manifest: "./Cargo.toml".into(),
-///     format: "version".to_string(),
-///     github_output: None,
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = CurrentArgs::parse_from(&["cargo", "version-info", "current"]);
 /// current(args)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

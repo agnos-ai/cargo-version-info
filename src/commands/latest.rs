@@ -84,14 +84,21 @@ pub struct LatestArgs {
 ///     LatestArgs,
 ///     latest,
 /// };
-///
-/// let args = LatestArgs {
-///     owner: Some("owner".to_string()),
-///     repo: Some("repo".to_string()),
-///     github_token: None,
-///     format: "version".to_string(),
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = LatestArgs::parse_from(&[
+///     "cargo",
+///     "version-info",
+///     "latest",
+///     "--owner",
+///     "owner",
+///     "--repo",
+///     "repo",
+/// ]);
 /// latest(args)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

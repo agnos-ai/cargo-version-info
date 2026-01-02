@@ -92,15 +92,21 @@ pub struct NextArgs {
 ///     NextArgs,
 ///     next,
 /// };
-///
-/// let args = NextArgs {
-///     owner: Some("owner".to_string()),
-///     repo: Some("repo".to_string()),
-///     github_token: None,
-///     format: "version".to_string(),
-///     github_output: None,
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = NextArgs::parse_from(&[
+///     "cargo",
+///     "version-info",
+///     "next",
+///     "--owner",
+///     "owner",
+///     "--repo",
+///     "repo",
+/// ]);
 /// next(args)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

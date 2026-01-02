@@ -16,10 +16,7 @@
 //! cargo version-info pr-log --output PR_LOG.md
 //! ```
 
-use anyhow::{
-    Context,
-    Result,
-};
+use anyhow::Result;
 use clap::Parser;
 
 /// Arguments for the `pr-log` command.
@@ -43,22 +40,13 @@ pub struct PrLogArgs {
 }
 
 /// Generate PR log from merged pull requests.
-pub fn pr_log(args: PrLogArgs) -> Result<()> {
-    // TODO: Implement PR log generation
-    // 1. Get commits since tag using gix
-    // 2. Use GitHub API to find merged PRs
-    // 3. Match PR merge commits to commit range
-    // 4. Generate markdown list
-    // 5. Write to output or stdout
-
-    let output = "## Pull Requests\n\n";
-
-    if let Some(output_path) = args.output {
-        std::fs::write(&output_path, output)
-            .with_context(|| format!("Failed to write PR log to {}", output_path))?;
-    } else {
-        print!("{}", output);
-    }
-
-    Ok(())
+///
+/// # Note
+///
+/// This command is currently a stub and not yet implemented. It will be
+/// available in a future release.
+pub fn pr_log(_args: PrLogArgs) -> Result<()> {
+    anyhow::bail!(
+        "PR log generation is not yet implemented. This feature will be available in a future release."
+    );
 }

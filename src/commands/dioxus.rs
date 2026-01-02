@@ -64,12 +64,13 @@ pub struct DioxusArgs {
 ///     DioxusArgs,
 ///     dioxus,
 /// };
-///
-/// let args = DioxusArgs {
-///     manifest: "./Cargo.toml".into(),
-///     format: "version".to_string(),
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = DioxusArgs::parse_from(&["cargo", "version-info", "dioxus"]);
 /// dioxus(args)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

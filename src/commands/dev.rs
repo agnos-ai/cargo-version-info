@@ -62,12 +62,13 @@ pub struct DevArgs {
 ///     DevArgs,
 ///     dev,
 /// };
-///
-/// let args = DevArgs {
-///     repo_path: ".".into(),
-///     format: "version".to_string(),
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = DevArgs::parse_from(&["cargo", "version-info", "dev"]);
 /// dev(args)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output

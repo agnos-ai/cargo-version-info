@@ -105,15 +105,13 @@ pub struct PostBumpHookArgs {
 ///     PostBumpHookArgs,
 ///     post_bump_hook,
 /// };
-///
-/// let args = PostBumpHookArgs {
-///     manifest: "./Cargo.toml".into(),
-///     repo_path: ".".into(),
-///     target_version: Some("1.0.0".to_string()),
-///     previous_version: Some("0.9.0".to_string()),
-///     exit_on_error: true,
-/// };
+/// use clap::Parser;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Parse from command line args
+/// let args = PostBumpHookArgs::parse_from(&["cargo", "version-info", "post-bump-hook"]);
 /// post_bump_hook(args)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Example Output
