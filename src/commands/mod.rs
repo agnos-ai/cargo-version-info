@@ -26,6 +26,9 @@ pub use badges::{
 pub use build_version::{
     BuildVersionArgs,
     build_version,
+    build_version_default,
+    build_version_for_repo,
+    compute_version_string,
 };
 pub use changed::{
     ChangedArgs,

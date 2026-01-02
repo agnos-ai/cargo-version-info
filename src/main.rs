@@ -11,15 +11,11 @@
 //! code.
 
 use std::fs;
+use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::Parser;
-
-mod commands;
-mod github;
-mod version;
-
-use commands::{
+use cargo_version_info::commands;
+use cargo_version_info::commands::{
     BadgesArgs,
     BuildVersionArgs,
     ChangedArgs,
@@ -37,20 +33,56 @@ use commands::{
     TagArgs,
     UpdateReadmeArgs,
 };
+use clap::{
+    ArgAction,
+    CommandFactory,
+    Parser,
+    Subcommand,
+};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "cargo-version-info",
-    about = "Unified version management for Rust projects",
-    bin_name = "cargo"
+    bin_name = "cargo",
+    disable_version_flag = true,
+    arg_required_else_help = false
 )]
-struct Cli {
+struct CargoArgs {
+    /// Compute version for the current repo (same logic as build-version).
+    #[arg(long = "tool-version", short = 'T')]
+    tool_version_flag: bool,
+
     #[command(subcommand)]
-    command: Command,
+    subcmd: Option<TopCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+enum TopCommand {
+    /// Unified version management for Rust projects
+    #[command(name = "version-info")]
+    VersionInfo(VersionInfoCli),
 }
 
 #[derive(Parser, Debug)]
-enum Command {
+#[command(
+    disable_version_flag = true,
+    subcommand_required = false,
+    arg_required_else_help = false
+)]
+struct VersionInfoCli {
+    /// Show computed version (same as `cargo version-info build-version`).
+    #[arg(long = "version", short = 'V', action = ArgAction::SetTrue)]
+    version_flag: bool,
+
+    #[command(subcommand)]
+    command: Option<VersionInfoCommand>,
+
+    /// Capture trailing args after `--` (e.g., `--version`).
+    #[arg(trailing_var_arg = true, hide = true)]
+    passthrough: Vec<String>,
+}
+
+#[derive(Parser, Debug)]
+enum VersionInfoCommand {
     /// Calculate next patch version from latest GitHub release
     #[command(name = "next")]
     Next(NextArgs),
@@ -99,6 +131,9 @@ enum Command {
     /// Update README with badges
     #[command(name = "update-readme")]
     UpdateReadme(UpdateReadmeArgs),
+    /// Compute effective version (same as --version)
+    #[command(name = "version")]
+    Version,
 }
 
 /// Check if any .env* files exist in the current directory.
@@ -142,24 +177,62 @@ fn main() -> Result<()> {
         eprintln!("Continuing with existing environment variables...");
     }
 
-    let cli = Cli::parse();
+    let args = CargoArgs::parse();
 
-    match cli.command {
-        Command::Next(args) => commands::next(args),
-        Command::Current(args) => commands::current(args),
-        Command::Latest(args) => commands::latest(args),
-        Command::Dev(args) => commands::dev(args),
-        Command::Tag(args) => commands::tag(args),
-        Command::Compare(args) => commands::compare(args),
-        Command::RustToolchain(args) => commands::rust_toolchain(args),
-        Command::Dioxus(args) => commands::dioxus(args),
-        Command::BuildVersion(args) => commands::build_version(args),
-        Command::Changed(args) => commands::changed(args),
-        Command::PreBumpHook(args) => commands::pre_bump_hook(args),
-        Command::PostBumpHook(args) => commands::post_bump_hook(args),
-        Command::Changelog(args) => commands::changelog(args),
-        Command::PrLog(args) => commands::pr_log(args),
-        Command::Badges(args) => commands::badges(args),
-        Command::UpdateReadme(args) => commands::update_readme(args),
+    if args.tool_version_flag {
+        return commands::build_version_for_repo(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
     }
+
+    if let Some(TopCommand::VersionInfo(cli)) = args.subcmd {
+        if cli.version_flag {
+            return commands::build_version_default();
+        }
+
+        if let Some(command) = cli.command {
+            return match command {
+                VersionInfoCommand::Next(args) => commands::next(args),
+                VersionInfoCommand::Current(args) => commands::current(args),
+                VersionInfoCommand::Latest(args) => commands::latest(args),
+                VersionInfoCommand::Dev(args) => commands::dev(args),
+                VersionInfoCommand::Tag(args) => commands::tag(args),
+                VersionInfoCommand::Compare(args) => commands::compare(args),
+                VersionInfoCommand::RustToolchain(args) => commands::rust_toolchain(args),
+                VersionInfoCommand::Dioxus(args) => commands::dioxus(args),
+                VersionInfoCommand::BuildVersion(args) => commands::build_version(args),
+                VersionInfoCommand::Changed(args) => commands::changed(args),
+                VersionInfoCommand::PreBumpHook(args) => commands::pre_bump_hook(args),
+                VersionInfoCommand::PostBumpHook(args) => commands::post_bump_hook(args),
+                VersionInfoCommand::Changelog(args) => commands::changelog(args),
+                VersionInfoCommand::PrLog(args) => commands::pr_log(args),
+                VersionInfoCommand::Badges(args) => commands::badges(args),
+                VersionInfoCommand::UpdateReadme(args) => commands::update_readme(args),
+                VersionInfoCommand::Version => commands::build_version_default(),
+            };
+        }
+
+        if cli
+            .passthrough
+            .iter()
+            .any(|arg| arg == "--version" || arg == "-V")
+        {
+            return commands::build_version_default();
+        }
+        if cli
+            .passthrough
+            .iter()
+            .any(|arg| arg == "--tool-version" || arg == "-T")
+        {
+            return commands::build_version_for_repo(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        }
+
+        // No inner command: show help
+        VersionInfoCli::command().print_help()?;
+        println!();
+        return Ok(());
+    }
+
+    // No subcommand: show help
+    CargoArgs::command().print_help()?;
+    println!();
+    Ok(())
 }
