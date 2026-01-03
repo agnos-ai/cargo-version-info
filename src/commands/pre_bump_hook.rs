@@ -39,11 +39,12 @@ use crate::version::parse_version;
 /// Arguments for the `pre-bump-hook` command.
 #[derive(Parser, Debug)]
 pub struct PreBumpHookArgs {
-    /// Path to the Cargo.toml manifest file.
+    /// Path to the Cargo.toml manifest file (standard cargo flag).
     ///
-    /// Defaults to `./Cargo.toml` in the current directory.
-    #[arg(long, default_value = "./Cargo.toml")]
-    manifest: PathBuf,
+    /// When running as a cargo subcommand, this is automatically handled.
+    /// `MetadataCommand` will use this if provided, otherwise auto-detects.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
 
     /// Path to the git repository.
     ///
@@ -136,8 +137,12 @@ pub struct PreBumpHookArgs {
 /// ```
 pub fn pre_bump_hook(args: PreBumpHookArgs) -> Result<()> {
     // Get current version from Cargo.toml using cargo_metadata (idiomatic way)
-    let cargo_version = get_package_version_from_manifest(&args.manifest)
-        .with_context(|| format!("Failed to get version from {}", args.manifest.display()))?;
+    let manifest_path = args
+        .manifest_path
+        .as_deref()
+        .unwrap_or_else(|| std::path::Path::new("./Cargo.toml"));
+    let cargo_version = get_package_version_from_manifest(manifest_path)
+        .with_context(|| format!("Failed to get version from {}", manifest_path.display()))?;
 
     // Get latest git tag version
     let latest_tag = std::process::Command::new("git")
@@ -205,28 +210,27 @@ pub fn pre_bump_hook(args: PreBumpHookArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
-    use tempfile::NamedTempFile;
-
     use super::*;
 
-    fn create_temp_manifest(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        write!(file, "{}", content).unwrap();
-        file
+    fn create_temp_cargo_project(content: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("Cargo.toml");
+        std::fs::write(&manifest_path, content).unwrap();
+        dir
     }
 
     #[test]
     fn test_pre_bump_hook_success() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "0.1.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PreBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: Some("0.1.1".to_string()),
             current_version: None,
@@ -238,14 +242,16 @@ version = "0.1.0"
 
     #[test]
     fn test_pre_bump_hook_major_bump_warning() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "0.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PreBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: Some("1.0.0".to_string()),
             current_version: None,
@@ -260,14 +266,16 @@ version = "0.0.0"
 
     #[test]
     fn test_pre_bump_hook_no_target_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "0.2.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PreBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: None,
             current_version: None,
@@ -279,7 +287,7 @@ version = "0.2.0"
     #[test]
     fn test_pre_bump_hook_file_not_found() {
         let args = PreBumpHookArgs {
-            manifest: "/nonexistent/Cargo.toml".into(),
+            manifest_path: Some("/nonexistent/Cargo.toml".into()),
             repo_path: ".".into(),
             target_version: None,
             current_version: None,
@@ -290,14 +298,15 @@ version = "0.2.0"
 
     #[test]
     fn test_pre_bump_hook_no_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
 name = "test"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PreBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: None,
             current_version: None,
@@ -308,14 +317,15 @@ name = "test"
 
     #[test]
     fn test_pre_bump_hook_workspace_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [workspace.package]
 version = "1.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PreBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: Some("1.0.1".to_string()),
             current_version: None,

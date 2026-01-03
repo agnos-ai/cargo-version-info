@@ -155,28 +155,28 @@ pub fn current(args: CurrentArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use tempfile::NamedTempFile;
 
     use super::*;
 
-    fn create_temp_manifest(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        write!(file, "{}", content).unwrap();
-        file
+    fn create_temp_cargo_project(content: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("Cargo.toml");
+        std::fs::write(&manifest_path, content).unwrap();
+        dir
     }
 
     #[test]
     fn test_current_workspace_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [workspace.package]
 version = "0.1.2"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = CurrentArgs {
-            manifest_path: Some(manifest.path().to_path_buf()),
+            manifest_path: Some(manifest_path),
             format: "version".to_string(),
             github_output: None,
         };
@@ -185,15 +185,16 @@ version = "0.1.2"
 
     #[test]
     fn test_current_package_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
 name = "test"
 version = "1.2.3"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = CurrentArgs {
-            manifest_path: Some(manifest.path().to_path_buf()),
+            manifest_path: Some(manifest_path),
             format: "version".to_string(),
             github_output: None,
         };
@@ -202,14 +203,16 @@ version = "1.2.3"
 
     #[test]
     fn test_current_json_format() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "0.5.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = CurrentArgs {
-            manifest_path: Some(manifest.path().to_path_buf()),
+            manifest_path: Some(manifest_path),
             format: "json".to_string(),
             github_output: None,
         };
@@ -218,15 +221,17 @@ version = "0.5.0"
 
     #[test]
     fn test_current_github_actions_format() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "2.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let output_file = NamedTempFile::new().unwrap();
         let args = CurrentArgs {
-            manifest_path: Some(manifest.path().to_path_buf()),
+            manifest_path: Some(manifest_path),
             format: "github-actions".to_string(),
             github_output: Some(output_file.path().to_string_lossy().to_string()),
         };
@@ -238,14 +243,16 @@ version = "2.0.0"
 
     #[test]
     fn test_current_invalid_format() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "1.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = CurrentArgs {
-            manifest_path: Some(manifest.path().to_path_buf()),
+            manifest_path: Some(manifest_path),
             format: "invalid".to_string(),
             github_output: None,
         };
@@ -264,14 +271,15 @@ version = "1.0.0"
 
     #[test]
     fn test_current_no_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
 name = "test"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = CurrentArgs {
-            manifest_path: Some(manifest.path().to_path_buf()),
+            manifest_path: Some(manifest_path),
             format: "version".to_string(),
             github_output: None,
         };

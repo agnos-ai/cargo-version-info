@@ -39,11 +39,12 @@ use super::common::get_package_version_from_manifest;
 /// Arguments for the `post-bump-hook` command.
 #[derive(Parser, Debug)]
 pub struct PostBumpHookArgs {
-    /// Path to the Cargo.toml manifest file.
+    /// Path to the Cargo.toml manifest file (standard cargo flag).
     ///
-    /// Defaults to `./Cargo.toml` in the current directory.
-    #[arg(long, default_value = "./Cargo.toml")]
-    manifest: PathBuf,
+    /// When running as a cargo subcommand, this is automatically handled.
+    /// `MetadataCommand` will use this if provided, otherwise auto-detects.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
 
     /// Path to the git repository.
     ///
@@ -135,8 +136,12 @@ pub struct PostBumpHookArgs {
 /// ```
 pub fn post_bump_hook(args: PostBumpHookArgs) -> Result<()> {
     // Get current version from Cargo.toml (after cog bump) using cargo_metadata
-    let cargo_version = get_package_version_from_manifest(&args.manifest)
-        .with_context(|| format!("Failed to get version from {}", args.manifest.display()))?;
+    let manifest_path = args
+        .manifest_path
+        .as_deref()
+        .unwrap_or_else(|| std::path::Path::new("./Cargo.toml"));
+    let cargo_version = get_package_version_from_manifest(manifest_path)
+        .with_context(|| format!("Failed to get version from {}", manifest_path.display()))?;
 
     // If target version is provided, verify it matches
     if let Some(target) = &args.target_version {
@@ -179,28 +184,27 @@ pub fn post_bump_hook(args: PostBumpHookArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
-    use tempfile::NamedTempFile;
-
     use super::*;
 
-    fn create_temp_manifest(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        write!(file, "{}", content).unwrap();
-        file
+    fn create_temp_cargo_project(content: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("Cargo.toml");
+        std::fs::write(&manifest_path, content).unwrap();
+        dir
     }
 
     #[test]
     fn test_post_bump_hook_success() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "1.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PostBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: Some("1.0.0".to_string()),
             previous_version: Some("0.9.0".to_string()),
@@ -211,14 +215,16 @@ version = "1.0.0"
 
     #[test]
     fn test_post_bump_hook_version_mismatch() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "0.9.1"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PostBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: Some("1.0.0".to_string()),
             previous_version: Some("0.9.0".to_string()),
@@ -229,14 +235,16 @@ version = "0.9.1"
 
     #[test]
     fn test_post_bump_hook_version_unchanged() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "0.9.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PostBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: None,
             previous_version: Some("0.9.0".to_string()),
@@ -247,14 +255,16 @@ version = "0.9.0"
 
     #[test]
     fn test_post_bump_hook_no_target_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "2.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PostBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: None,
             previous_version: None,
@@ -265,14 +275,16 @@ version = "2.0.0"
 
     #[test]
     fn test_post_bump_hook_no_previous_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "1.5.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PostBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: Some("1.5.0".to_string()),
             previous_version: None,
@@ -284,7 +296,7 @@ version = "1.5.0"
     #[test]
     fn test_post_bump_hook_file_not_found() {
         let args = PostBumpHookArgs {
-            manifest: "/nonexistent/Cargo.toml".into(),
+            manifest_path: Some("/nonexistent/Cargo.toml".into()),
             repo_path: ".".into(),
             target_version: None,
             previous_version: None,
@@ -295,14 +307,15 @@ version = "1.5.0"
 
     #[test]
     fn test_post_bump_hook_no_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
 name = "test"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PostBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: None,
             previous_version: None,
@@ -313,14 +326,16 @@ name = "test"
 
     #[test]
     fn test_post_bump_hook_exit_on_error_false() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "0.9.1"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PostBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: Some("1.0.0".to_string()),
             previous_version: Some("0.9.0".to_string()),
@@ -334,14 +349,15 @@ version = "0.9.1"
 
     #[test]
     fn test_post_bump_hook_workspace_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [workspace.package]
 version = "2.1.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = PostBumpHookArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             target_version: Some("2.1.0".to_string()),
             previous_version: Some("2.0.0".to_string()),

@@ -32,11 +32,12 @@ use super::common::get_package_version_from_manifest;
 /// Arguments for the `changed` command.
 #[derive(Parser, Debug)]
 pub struct ChangedArgs {
-    /// Path to the Cargo.toml manifest file.
+    /// Path to the Cargo.toml manifest file (standard cargo flag).
     ///
-    /// Defaults to `./Cargo.toml` in the current directory.
-    #[arg(long, default_value = "./Cargo.toml")]
-    manifest: PathBuf,
+    /// When running as a cargo subcommand, this is automatically handled.
+    /// `MetadataCommand` will use this if provided, otherwise auto-detects.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
 
     /// Path to the git repository.
     ///
@@ -131,8 +132,12 @@ pub struct ChangedArgs {
 /// ```
 pub fn changed(args: ChangedArgs) -> Result<()> {
     // Get current version from Cargo.toml using cargo_metadata (idiomatic way)
-    let cargo_version = get_package_version_from_manifest(&args.manifest)
-        .with_context(|| format!("Failed to get version from {}", args.manifest.display()))?;
+    let manifest_path = args
+        .manifest_path
+        .as_deref()
+        .unwrap_or_else(|| std::path::Path::new("./Cargo.toml"));
+    let cargo_version = get_package_version_from_manifest(manifest_path)
+        .with_context(|| format!("Failed to get version from {}", manifest_path.display()))?;
 
     // Find latest tag using git describe (simpler and more reliable)
     let latest_tag = std::process::Command::new("git")
@@ -193,28 +198,29 @@ pub fn changed(args: ChangedArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use tempfile::NamedTempFile;
 
     use super::*;
 
-    fn create_temp_manifest(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap();
-        write!(file, "{}", content).unwrap();
-        file
+    fn create_temp_cargo_project(content: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("Cargo.toml");
+        std::fs::write(&manifest_path, content).unwrap();
+        dir
     }
 
     #[test]
     fn test_changed_bool_format() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "0.1.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = ChangedArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             format: "bool".to_string(),
             github_output: None,
@@ -225,14 +231,16 @@ version = "0.1.0"
 
     #[test]
     fn test_changed_json_format() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "1.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = ChangedArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             format: "json".to_string(),
             github_output: None,
@@ -242,14 +250,16 @@ version = "1.0.0"
 
     #[test]
     fn test_changed_diff_format() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "2.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = ChangedArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             format: "diff".to_string(),
             github_output: None,
@@ -259,15 +269,17 @@ version = "2.0.0"
 
     #[test]
     fn test_changed_github_actions_format() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "3.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let output_file = NamedTempFile::new().unwrap();
         let args = ChangedArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             format: "github-actions".to_string(),
             github_output: Some(output_file.path().to_string_lossy().to_string()),
@@ -284,14 +296,16 @@ version = "3.0.0"
 
     #[test]
     fn test_changed_invalid_format() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
+name = "test"
 version = "1.0.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = ChangedArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             format: "invalid".to_string(),
             github_output: None,
@@ -302,7 +316,7 @@ version = "1.0.0"
     #[test]
     fn test_changed_file_not_found() {
         let args = ChangedArgs {
-            manifest: "/nonexistent/Cargo.toml".into(),
+            manifest_path: Some("/nonexistent/Cargo.toml".into()),
             repo_path: ".".into(),
             format: "bool".to_string(),
             github_output: None,
@@ -312,14 +326,15 @@ version = "1.0.0"
 
     #[test]
     fn test_changed_no_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [package]
 name = "test"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = ChangedArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             format: "bool".to_string(),
             github_output: None,
@@ -329,14 +344,15 @@ name = "test"
 
     #[test]
     fn test_changed_workspace_version() {
-        let manifest = create_temp_manifest(
+        let _dir = create_temp_cargo_project(
             r#"
 [workspace.package]
 version = "0.5.0"
 "#,
         );
+        let manifest_path = _dir.path().join("Cargo.toml");
         let args = ChangedArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest_path),
             repo_path: ".".into(),
             format: "bool".to_string(),
             github_output: None,
