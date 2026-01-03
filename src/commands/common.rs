@@ -6,6 +6,7 @@ use anyhow::{
     Context,
     Result,
 };
+use cargo_metadata::MetadataCommand;
 
 /// Detect GitHub repository from environment or git remote.
 #[allow(clippy::disallowed_methods)] // CLI tool needs direct env access
@@ -61,7 +62,94 @@ pub fn get_owner_repo(owner: Option<String>, repo: Option<String>) -> Result<(St
     }
 }
 
+/// Get package version using cargo_metadata (idiomatic way).
+///
+/// This function uses `cargo_metadata::MetadataCommand` which automatically
+/// handles `--manifest-path` when running as a cargo subcommand.
+///
+/// Returns the version from workspace.package.version if in a workspace,
+/// otherwise from package.version.
+#[allow(dead_code)] // May be used by external callers
+pub fn get_package_version() -> Result<String> {
+    let metadata = MetadataCommand::new()
+        .exec()
+        .context("Failed to get cargo metadata. Make sure you're in a Cargo project.")?;
+
+    // Check if we're in a workspace and get workspace package version
+    if !metadata.workspace_members.is_empty() {
+        // Find the workspace package (usually the root package or first member)
+        if let Some(root_package) = metadata.root_package() {
+            // If root package exists and is in workspace, use it
+            if metadata.workspace_members.contains(&root_package.id) {
+                return Ok(root_package.version.to_string());
+            }
+        }
+        // Otherwise, find first workspace member package
+        if let Some(first_member_id) = metadata.workspace_members.first()
+            && let Some(workspace_package) = metadata
+                .packages
+                .iter()
+                .find(|pkg| &pkg.id == first_member_id)
+        {
+            return Ok(workspace_package.version.to_string());
+        }
+    }
+
+    // Fall back to root package
+    let root_package = metadata
+        .root_package()
+        .context("No package found in metadata")?;
+
+    Ok(root_package.version.to_string())
+}
+
+/// Get package version from a specific manifest path using cargo_metadata.
+pub fn get_package_version_from_manifest(manifest_path: &std::path::Path) -> Result<String> {
+    let metadata = MetadataCommand::new()
+        .manifest_path(manifest_path)
+        .exec()
+        .with_context(|| {
+            format!(
+                "Failed to get cargo metadata for {}",
+                manifest_path.display()
+            )
+        })?;
+
+    // Check if we're in a workspace and get workspace package version
+    if !metadata.workspace_members.is_empty() {
+        // Find the workspace package (usually the root package or first member)
+        if let Some(root_package) = metadata.root_package() {
+            // If root package exists and is in workspace, use it
+            if metadata.workspace_members.contains(&root_package.id) {
+                return Ok(root_package.version.to_string());
+            }
+        }
+        // Otherwise, find first workspace member package
+        if let Some(first_member_id) = metadata.workspace_members.first()
+            && let Some(workspace_package) = metadata
+                .packages
+                .iter()
+                .find(|pkg| &pkg.id == first_member_id)
+        {
+            return Ok(workspace_package.version.to_string());
+        }
+    }
+
+    // Fall back to root package
+    let root_package = metadata
+        .root_package()
+        .context("No package found in metadata")?;
+
+    Ok(root_package.version.to_string())
+}
+
 /// Extract version from `[workspace.package]` section.
+///
+/// **DEPRECATED**: Use `get_package_version()` or
+/// `get_package_version_from_manifest()` instead. This function is kept for
+/// backward compatibility and tests but should not be used in new code.
+#[deprecated(note = "Use get_package_version() or get_package_version_from_manifest() instead")]
+#[allow(dead_code)] // Used in tests
 pub fn extract_workspace_version(content: &str) -> Option<String> {
     let parsed: toml::Value = toml::from_str(content).ok()?;
     parsed
@@ -73,6 +161,12 @@ pub fn extract_workspace_version(content: &str) -> Option<String> {
 }
 
 /// Extract version from `[package]` section.
+///
+/// **DEPRECATED**: Use `get_package_version()` or
+/// `get_package_version_from_manifest()` instead. This function is kept for
+/// backward compatibility and tests but should not be used in new code.
+#[deprecated(note = "Use get_package_version() or get_package_version_from_manifest() instead")]
+#[allow(dead_code)] // Used in tests
 pub fn extract_package_version(content: &str) -> Result<String> {
     let parsed: toml::Value = toml::from_str(content).context("Failed to parse Cargo.toml")?;
     parsed
@@ -118,6 +212,7 @@ mod tests {
         );
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_extract_workspace_version() {
         let content = r#"
@@ -130,6 +225,7 @@ version = "0.1.2"
         );
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_extract_workspace_version_with_spaces() {
         let content = r#"
@@ -142,6 +238,7 @@ version = "1.2.3"
         );
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_extract_workspace_version_not_found() {
         let content = r#"
@@ -151,6 +248,7 @@ version = "0.1.2"
         assert_eq!(extract_workspace_version(content), None);
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_extract_package_version() {
         let content = r#"
@@ -164,6 +262,7 @@ version = "0.1.2"
         );
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_extract_package_version_with_spaces() {
         let content = r#"
@@ -177,6 +276,7 @@ version = "1.2.3"
         );
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_extract_package_version_not_found() {
         let content = r#"
@@ -186,6 +286,7 @@ name = "test"
         assert!(extract_package_version(content).is_err());
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_extract_workspace_version_precedence() {
         // Workspace version should be found even if package version exists

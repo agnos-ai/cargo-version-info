@@ -9,8 +9,8 @@
 //! # Get version from current directory's Cargo.toml
 //! cargo version-info current
 //!
-//! # Get version from a specific Cargo.toml
-//! cargo version-info current --manifest ./path/to/Cargo.toml
+//! # Get version from a specific Cargo.toml (standard cargo flag)
+//! cargo version-info current --manifest-path ./path/to/Cargo.toml
 //!
 //! # Get JSON output
 //! cargo version-info current --format json
@@ -25,21 +25,18 @@ use anyhow::{
     Context,
     Result,
 };
+use cargo_metadata::MetadataCommand;
 use clap::Parser;
-
-use super::common::{
-    extract_package_version,
-    extract_workspace_version,
-};
 
 /// Arguments for the `current` command.
 #[derive(Parser, Debug)]
 pub struct CurrentArgs {
-    /// Path to the Cargo.toml manifest file.
+    /// Path to the Cargo.toml manifest file (standard cargo flag).
     ///
-    /// Defaults to `./Cargo.toml` in the current directory.
-    #[arg(long, default_value = "./Cargo.toml")]
-    manifest: PathBuf,
+    /// When running as a cargo subcommand, this is automatically handled.
+    /// `MetadataCommand` will use this if provided, otherwise auto-detects.
+    #[arg(long)]
+    manifest_path: Option<PathBuf>,
 
     /// Output format for the version.
     ///
@@ -102,16 +99,43 @@ pub struct CurrentArgs {
 /// version=0.1.2
 /// ```
 pub fn current(args: CurrentArgs) -> Result<()> {
-    let content = std::fs::read_to_string(&args.manifest)
-        .with_context(|| format!("Failed to read {}", args.manifest.display()))?;
+    // Use cargo_metadata idiomatically - it automatically handles --manifest-path
+    let mut cmd = MetadataCommand::new();
+    if let Some(manifest_path) = &args.manifest_path {
+        cmd.manifest_path(manifest_path);
+    }
 
-    // Try workspace.package.version first
-    let version = if let Some(workspace_version) = extract_workspace_version(&content) {
-        workspace_version
+    let metadata = cmd
+        .exec()
+        .context("Failed to get cargo metadata. Make sure you're in a Cargo project.")?;
+
+    // Get version from metadata (workspace or root package)
+    let version = if !metadata.workspace_members.is_empty() {
+        // Check if root package is in workspace
+        if let Some(root_package) = metadata.root_package()
+            && metadata.workspace_members.contains(&root_package.id)
+        {
+            root_package.version.to_string()
+        } else if let Some(first_member_id) = metadata.workspace_members.first()
+            && let Some(workspace_package) = metadata
+                .packages
+                .iter()
+                .find(|pkg| &pkg.id == first_member_id)
+        {
+            workspace_package.version.to_string()
+        } else {
+            metadata
+                .root_package()
+                .context("No package found in metadata")?
+                .version
+                .to_string()
+        }
     } else {
-        // Fall back to package.version
-        extract_package_version(&content)
-            .with_context(|| format!("No version found in {}", args.manifest.display()))?
+        metadata
+            .root_package()
+            .context("No package found in metadata")?
+            .version
+            .to_string()
     };
 
     match args.format.as_str() {
@@ -152,7 +176,7 @@ version = "0.1.2"
 "#,
         );
         let args = CurrentArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest.path().to_path_buf()),
             format: "version".to_string(),
             github_output: None,
         };
@@ -169,7 +193,7 @@ version = "1.2.3"
 "#,
         );
         let args = CurrentArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest.path().to_path_buf()),
             format: "version".to_string(),
             github_output: None,
         };
@@ -185,7 +209,7 @@ version = "0.5.0"
 "#,
         );
         let args = CurrentArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest.path().to_path_buf()),
             format: "json".to_string(),
             github_output: None,
         };
@@ -202,7 +226,7 @@ version = "2.0.0"
         );
         let output_file = NamedTempFile::new().unwrap();
         let args = CurrentArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest.path().to_path_buf()),
             format: "github-actions".to_string(),
             github_output: Some(output_file.path().to_string_lossy().to_string()),
         };
@@ -221,7 +245,7 @@ version = "1.0.0"
 "#,
         );
         let args = CurrentArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest.path().to_path_buf()),
             format: "invalid".to_string(),
             github_output: None,
         };
@@ -231,7 +255,7 @@ version = "1.0.0"
     #[test]
     fn test_current_file_not_found() {
         let args = CurrentArgs {
-            manifest: "/nonexistent/Cargo.toml".into(),
+            manifest_path: Some("/nonexistent/Cargo.toml".into()),
             format: "version".to_string(),
             github_output: None,
         };
@@ -247,7 +271,7 @@ name = "test"
 "#,
         );
         let args = CurrentArgs {
-            manifest: manifest.path().to_path_buf(),
+            manifest_path: Some(manifest.path().to_path_buf()),
             format: "version".to_string(),
             github_output: None,
         };

@@ -27,10 +27,7 @@ use anyhow::{
 };
 use clap::Parser;
 
-use super::common::{
-    extract_package_version,
-    extract_workspace_version,
-};
+use super::common::get_package_version_from_manifest;
 
 /// Arguments for the `changed` command.
 #[derive(Parser, Debug)]
@@ -133,16 +130,9 @@ pub struct ChangedArgs {
 /// latest_tag_version=0.1.0
 /// ```
 pub fn changed(args: ChangedArgs) -> Result<()> {
-    // Get current version from Cargo.toml
-    let content = std::fs::read_to_string(&args.manifest)
-        .with_context(|| format!("Failed to read {}", args.manifest.display()))?;
-
-    let cargo_version = if let Some(workspace_version) = extract_workspace_version(&content) {
-        workspace_version
-    } else {
-        extract_package_version(&content)
-            .with_context(|| format!("No version found in {}", args.manifest.display()))?
-    };
+    // Get current version from Cargo.toml using cargo_metadata (idiomatic way)
+    let cargo_version = get_package_version_from_manifest(&args.manifest)
+        .with_context(|| format!("Failed to get version from {}", args.manifest.display()))?;
 
     // Find latest tag using git describe (simpler and more reliable)
     let latest_tag = std::process::Command::new("git")

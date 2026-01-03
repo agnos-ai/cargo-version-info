@@ -34,10 +34,7 @@ use anyhow::{
 };
 use clap::Parser;
 
-use super::common::{
-    extract_package_version,
-    extract_workspace_version,
-};
+use super::common::get_package_version_from_manifest;
 
 /// Arguments for the `post-bump-hook` command.
 #[derive(Parser, Debug)]
@@ -137,16 +134,9 @@ pub struct PostBumpHookArgs {
 /// Error: Version bump appears to have failed
 /// ```
 pub fn post_bump_hook(args: PostBumpHookArgs) -> Result<()> {
-    // Get current version from Cargo.toml (after cog bump)
-    let content = std::fs::read_to_string(&args.manifest)
-        .with_context(|| format!("Failed to read {}", args.manifest.display()))?;
-
-    let cargo_version = if let Some(workspace_version) = extract_workspace_version(&content) {
-        workspace_version
-    } else {
-        extract_package_version(&content)
-            .with_context(|| format!("No version found in {}", args.manifest.display()))?
-    };
+    // Get current version from Cargo.toml (after cog bump) using cargo_metadata
+    let cargo_version = get_package_version_from_manifest(&args.manifest)
+        .with_context(|| format!("Failed to get version from {}", args.manifest.display()))?;
 
     // If target version is provided, verify it matches
     if let Some(target) = &args.target_version {
