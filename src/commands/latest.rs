@@ -23,9 +23,9 @@ use anyhow::{
     Context,
     Result,
 };
+use cargo_plugin_utils::common::get_owner_repo;
 use clap::Parser;
 
-use super::common::get_owner_repo;
 use crate::github;
 use crate::version::{
     format_tag,

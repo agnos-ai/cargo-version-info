@@ -1,11 +1,10 @@
 //! Generate number of tests badge.
 
-use std::process::Command;
-
 use anyhow::{
     Context,
     Result,
 };
+use portable_pty::CommandBuilder;
 use serde::{
     Deserialize,
     Serialize,
@@ -14,13 +13,20 @@ use serde::{
 use super::common;
 
 /// Show the number of tests badge.
-pub async fn badge_number_of_tests(package: &cargo_metadata::Package) -> Result<()> {
-    let test_count = get_test_count(package).await?;
+pub async fn badge_number_of_tests(
+    writer: &mut dyn std::io::Write,
+    package: &cargo_metadata::Package,
+) -> Result<()> {
+    let mut logger = cargo_plugin_utils::logger::Logger::new();
+    // Use ephemeral status (cyan) for subprocess operations
+    logger.status("Generating", "test count badge");
+
+    let test_count = get_test_count(&mut logger, package).await?;
 
     if let Some(count) = test_count {
         let badge_url = format!("https://img.shields.io/badge/tests-{}-blue", count);
         let badge_markdown = format!("[![Tests]({})](tests/)", badge_url);
-        println!("{}", badge_markdown);
+        writeln!(writer, "{}", badge_markdown)?;
     }
 
     Ok(())
@@ -39,7 +45,10 @@ struct TestCountCache {
 
 /// Get the number of tests in the package.
 /// Uses cache if available and valid.
-async fn get_test_count(package: &cargo_metadata::Package) -> Result<Option<u32>> {
+async fn get_test_count(
+    logger: &mut cargo_plugin_utils::logger::Logger,
+    package: &cargo_metadata::Package,
+) -> Result<Option<u32>> {
     // Try to load from cache first
     if let Some(cached) = load_test_count_cache(package).await? {
         let current_key = common::compute_cache_key(package).await?;
@@ -49,34 +58,31 @@ async fn get_test_count(package: &cargo_metadata::Package) -> Result<Option<u32>
     }
 
     // Use cargo test --no-run --message-format=json to count tests
-    let output_result = tokio::task::spawn_blocking({
-        let package_name = package.name.clone();
+    let package_name = package.name.clone();
+    let output = cargo_plugin_utils::logger::run_subprocess(
+        logger,
         move || {
-            Command::new("cargo")
-                .args([
-                    "test",
-                    "--package",
-                    &package_name,
-                    "--no-run",
-                    "--message-format=json",
-                ])
-                .output()
-        }
-    })
-    .await
-    .context("Failed to spawn blocking task")?;
+            let mut cmd = CommandBuilder::new("cargo");
+            cmd.arg("test");
+            cmd.arg("--package");
+            cmd.arg(package_name.as_str());
+            cmd.arg("--no-run");
+            cmd.arg("--message-format");
+            cmd.arg("json");
+            cmd
+        },
+        None,
+    )
+    .await?;
 
-    let output = match output_result {
-        Ok(out) => out,
-        Err(_) => return Ok(None),
-    };
-
-    if !output.status.success() {
+    if !output.success() {
         return Ok(None);
     }
 
     // Parse JSON messages to count test artifacts
-    let stdout = String::from_utf8(output.stdout).context("Failed to parse cargo test output")?;
+    let stdout = output
+        .stdout_str()
+        .context("Failed to parse cargo test output")?;
 
     let mut test_count = 0;
     let package_id_prefix = format!("{}@", package.name);
@@ -130,31 +136,47 @@ async fn get_test_count(package: &cargo_metadata::Package) -> Result<Option<u32>
 
     // Alternative: count by running test binaries with --list flag
     // First ensure tests are compiled, then run with --list to get test names
-    let list_output_result = tokio::task::spawn_blocking({
-        let package_name = package.name.clone();
-        move || {
-            // First compile tests
-            let compile_status = Command::new("cargo")
-                .args(["test", "--package", &package_name, "--no-run"])
-                .status();
-
-            if compile_status.is_err() || !compile_status.unwrap().success() {
-                return Err(std::io::Error::other("Failed to compile tests"));
+    let package_name = package.name.clone();
+    let compile_output = cargo_plugin_utils::logger::run_subprocess(
+        logger,
+        {
+            let package_name = package_name.clone();
+            move || {
+                let mut cmd = CommandBuilder::new("cargo");
+                cmd.arg("test");
+                cmd.arg("--package");
+                cmd.arg(package_name.as_str());
+                cmd.arg("--no-run");
+                cmd
             }
+        },
+        None,
+    )
+    .await?;
 
-            // Then run with --list to get test names
-            Command::new("cargo")
-                .args(["test", "--package", &package_name, "--", "--list"])
-                .output()
-        }
-    })
-    .await
-    .context("Failed to spawn blocking task")?;
+    if !compile_output.success() {
+        return Ok(None);
+    }
 
-    if let Ok(list_output) = list_output_result
-        && list_output.status.success()
-    {
-        let list_stdout = String::from_utf8(list_output.stdout)
+    // Then run with --list to get test names
+    let list_output = cargo_plugin_utils::logger::run_subprocess(
+        logger,
+        move || {
+            let mut cmd = CommandBuilder::new("cargo");
+            cmd.arg("test");
+            cmd.arg("--package");
+            cmd.arg(package_name.as_str());
+            cmd.arg("--");
+            cmd.arg("--list");
+            cmd
+        },
+        None,
+    )
+    .await?;
+
+    if list_output.success() {
+        let list_stdout = list_output
+            .stdout_str()
             .context("Failed to parse cargo test --list output")?;
 
         // Count lines that are test names (format: "test_name: test")

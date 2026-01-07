@@ -7,61 +7,6 @@ use anyhow::{
     Result,
 };
 
-/// Check if crate is published on crates.io.
-///
-/// Uses HTTP request when `no_network` is false, otherwise uses heuristics.
-pub async fn is_published_on_crates_io(
-    package_name: &str,
-    package: &cargo_metadata::Package,
-    no_network: bool,
-) -> Result<bool> {
-    if no_network {
-        guess_if_published(package).await
-    } else {
-        let api_url = format!("https://crates.io/api/v1/crates/{}", package_name);
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .context("Failed to create HTTP client")?;
-
-        let response = client
-            .get(&api_url)
-            .header("User-Agent", "cargo-version-info")
-            .send()
-            .await
-            .context("Failed to check crates.io")?;
-
-        Ok(response.status().is_success())
-    }
-}
-
-/// Check if crate is published on docs.rs.
-///
-/// Uses HTTP request when `no_network` is false, otherwise uses heuristics.
-pub async fn is_published_on_docs_rs(
-    package_name: &str,
-    package: &cargo_metadata::Package,
-    no_network: bool,
-) -> Result<bool> {
-    if no_network {
-        guess_if_published(package).await
-    } else {
-        let docs_url = format!("https://docs.rs/{}", package_name);
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .context("Failed to create HTTP client")?;
-
-        let response = client
-            .head(&docs_url)
-            .send()
-            .await
-            .context("Failed to check docs.rs")?;
-
-        Ok(response.status().is_success())
-    }
-}
-
 /// Heuristically guess if a crate is likely published on crates.io/docs.rs.
 ///
 /// Checks:

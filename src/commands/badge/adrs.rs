@@ -1,9 +1,14 @@
 //! Generate ADRs badge.
 
+use std::io::Write;
+
 use anyhow::Result;
 
 /// Show the ADRs badge.
-pub async fn badge_adrs(package: &cargo_metadata::Package) -> Result<()> {
+pub async fn badge_adrs(writer: &mut dyn Write, package: &cargo_metadata::Package) -> Result<()> {
+    let mut logger = cargo_plugin_utils::logger::Logger::new();
+    logger.status("Generating", "ADRs badge");
+
     let manifest_dir = package
         .manifest_path
         .as_std_path()
@@ -17,7 +22,7 @@ pub async fn badge_adrs(package: &cargo_metadata::Package) -> Result<()> {
     if has_adrs {
         let badge_url = "https://img.shields.io/badge/ADRs-index-informational";
         let badge_markdown = format!("[![ADRs]({})](docs/adr/index.typ)", badge_url);
-        println!("{}", badge_markdown);
+        writeln!(writer, "{}", badge_markdown)?;
     }
 
     Ok(())

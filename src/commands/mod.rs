@@ -3,8 +3,7 @@
 mod badge;
 mod build_version;
 mod changed;
-mod changelog;
-mod common;
+pub mod changelog;
 mod compare;
 mod current;
 mod dev;
@@ -14,6 +13,7 @@ mod next;
 mod post_bump_hook;
 mod pr_log;
 mod pre_bump_hook;
+mod release_page;
 mod rust_toolchain;
 mod tag;
 mod update_readme;
@@ -72,6 +72,10 @@ pub use pr_log::{
 pub use pre_bump_hook::{
     PreBumpHookArgs,
     pre_bump_hook,
+};
+pub use release_page::{
+    ReleasePageArgs,
+    release_page,
 };
 pub use rust_toolchain::{
     RustToolchainArgs,

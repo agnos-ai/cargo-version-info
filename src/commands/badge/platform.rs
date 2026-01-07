@@ -1,9 +1,17 @@
 //! Generate platform badge.
 
+use std::io::Write;
+
 use anyhow::Result;
 
 /// Show the platform badge.
-pub async fn badge_platform(package: &cargo_metadata::Package) -> Result<()> {
+pub async fn badge_platform(
+    writer: &mut dyn Write,
+    package: &cargo_metadata::Package,
+) -> Result<()> {
+    let mut logger = cargo_plugin_utils::logger::Logger::new();
+    logger.status("Generating", "platform badge");
+
     let manifest_dir = package
         .manifest_path
         .as_std_path()
@@ -36,11 +44,11 @@ pub async fn badge_platform(package: &cargo_metadata::Package) -> Result<()> {
             "[![Platform]({})](docs/adr/0002-flyio-oxigraph-provisioning-strategy.typ)",
             badge_url
         );
-        println!("{}", badge_markdown);
+        writeln!(writer, "{}", badge_markdown)?;
     } else if has_vercel {
         let badge_url = "https://img.shields.io/badge/platform-Vercel-black";
         let badge_markdown = format!("[![Platform]({})](docs/adr/)", badge_url);
-        println!("{}", badge_markdown);
+        writeln!(writer, "{}", badge_markdown)?;
     }
     // Future: add other platforms (AWS, GCP, Azure, etc.)
 

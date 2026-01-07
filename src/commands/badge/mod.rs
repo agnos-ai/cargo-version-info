@@ -48,15 +48,19 @@ mod adrs;
 mod all;
 mod common;
 mod coverage;
-mod cratesio;
+mod crates_io;
+mod docs_rs;
 mod framework;
 mod license;
 mod number_of_tests;
 mod platform;
 mod runtime;
 mod rust_edition;
-mod rustdocs;
 
+use std::io::Write;
+
+// Re-export for use by other commands (like release_page)
+pub use all::badge_all;
 use anyhow::{
     Context,
     Result,
@@ -122,23 +126,60 @@ pub fn badge(args: BadgeArgs) -> Result<()> {
 
 /// Async entry point for badge generation.
 async fn badge_async(args: BadgeArgs) -> Result<()> {
+    // Create logger - status messages go to stderr, badges to stdout
+    let mut logger = cargo_plugin_utils::logger::Logger::new();
+
     // Detect package from Cargo's context (working directory when
     // --manifest-path is used)
+    logger.status("Checking", "package metadata");
     let package = find_package().await?;
 
+    // Buffer all badge output to avoid mixing with stderr status lines
+    let mut buffer = Vec::new();
+
+    // Drop the initial logger - each badge function creates its own
+    drop(logger);
+
     match args.subcommand {
-        BadgeSubcommand::All => all::badge_all(&package, args.no_network).await,
-        BadgeSubcommand::Rustdocs => rustdocs::badge_rustdocs(&package, args.no_network).await,
-        BadgeSubcommand::Cratesio => cratesio::badge_cratesio(&package, args.no_network).await,
-        BadgeSubcommand::License => license::badge_license(&package).await,
-        BadgeSubcommand::RustEdition => rust_edition::badge_rust_edition(&package).await,
-        BadgeSubcommand::Runtime => runtime::badge_runtime(&package).await,
-        BadgeSubcommand::Framework => framework::badge_framework(&package).await,
-        BadgeSubcommand::Platform => platform::badge_platform(&package).await,
-        BadgeSubcommand::ADRs => adrs::badge_adrs(&package).await,
-        BadgeSubcommand::Coverage => coverage::badge_coverage(&package).await,
-        BadgeSubcommand::NumberOfTests => number_of_tests::badge_number_of_tests(&package).await,
-    }
+        BadgeSubcommand::All => {
+            // Each badge function manages its own status logging via Drop
+            docs_rs::badge_rustdocs(&mut buffer, &package, args.no_network).await?;
+            crates_io::badge_cratesio(&mut buffer, &package, args.no_network).await?;
+            license::badge_license(&mut buffer, &package).await?;
+            rust_edition::badge_rust_edition(&mut buffer, &package).await?;
+            runtime::badge_runtime(&mut buffer, &package).await?;
+            framework::badge_framework(&mut buffer, &package).await?;
+            platform::badge_platform(&mut buffer, &package).await?;
+            adrs::badge_adrs(&mut buffer, &package).await?;
+            coverage::badge_coverage(&mut buffer, &package).await?;
+            number_of_tests::badge_number_of_tests(&mut buffer, &package).await?;
+
+            Ok(())
+        }
+        BadgeSubcommand::Rustdocs => {
+            docs_rs::badge_rustdocs(&mut buffer, &package, args.no_network).await
+        }
+        BadgeSubcommand::Cratesio => {
+            crates_io::badge_cratesio(&mut buffer, &package, args.no_network).await
+        }
+        BadgeSubcommand::License => license::badge_license(&mut buffer, &package).await,
+        BadgeSubcommand::RustEdition => {
+            rust_edition::badge_rust_edition(&mut buffer, &package).await
+        }
+        BadgeSubcommand::Runtime => runtime::badge_runtime(&mut buffer, &package).await,
+        BadgeSubcommand::Framework => framework::badge_framework(&mut buffer, &package).await,
+        BadgeSubcommand::Platform => platform::badge_platform(&mut buffer, &package).await,
+        BadgeSubcommand::ADRs => adrs::badge_adrs(&mut buffer, &package).await,
+        BadgeSubcommand::Coverage => coverage::badge_coverage(&mut buffer, &package).await,
+        BadgeSubcommand::NumberOfTests => {
+            number_of_tests::badge_number_of_tests(&mut buffer, &package).await
+        }
+    }?;
+
+    // Now write all buffered output to stdout at once
+    std::io::stdout().write_all(&buffer)?;
+
+    Ok(())
 }
 
 /// Find the Cargo package using cargo_metadata.
@@ -146,11 +187,13 @@ async fn badge_async(args: BadgeArgs) -> Result<()> {
 /// This automatically respects Cargo's `--manifest-path` option when running
 /// as a cargo subcommand.
 ///
-/// Returns the package that corresponds to the current context:
-/// - If `--manifest-path` is specified, finds the package matching that path
-/// - Otherwise, finds the package in the current working directory
-/// - Falls back to the root package if no match is found
-async fn find_package() -> Result<cargo_metadata::Package> {
+/// Returns the package that corresponds to the current context, in order:
+/// 1. Package whose directory matches the current working directory
+/// 2. Package whose manifest path matches `current_dir/Cargo.toml`
+/// 3. Root package (if workspace has a root package)
+/// 4. First default-member (if workspace has default-members configured)
+/// 5. Error if no package can be determined
+pub async fn find_package() -> Result<cargo_metadata::Package> {
     use cargo_metadata::MetadataCommand;
 
     // Use cargo_metadata which automatically respects --manifest-path
@@ -161,15 +204,48 @@ async fn find_package() -> Result<cargo_metadata::Package> {
 
     // Try to find the package in the current working directory
     let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let current_manifest = current_dir.join("Cargo.toml");
 
-    // Canonicalize current manifest path and all package paths, then find match
-    let (canonical_current, packages_with_paths) = tokio::task::spawn_blocking({
+    // Canonicalize current directory and all package directories, then find match
+    let (canonical_current_dir, packages_with_dirs) = tokio::task::spawn_blocking({
+        let packages = metadata.packages.clone();
+        let current = current_dir.clone();
+        move || {
+            let canonical_current_dir = current.canonicalize().ok();
+            let packages_with_dirs: Vec<_> = packages
+                .iter()
+                .filter_map(|pkg| {
+                    // Get the directory containing the manifest (package directory)
+                    pkg.manifest_path
+                        .as_std_path()
+                        .parent()
+                        .and_then(|p| p.canonicalize().ok())
+                        .map(|p| (pkg.clone(), p))
+                })
+                .collect();
+            (canonical_current_dir, packages_with_dirs)
+        }
+    })
+    .await
+    .context("Failed to spawn blocking task")?;
+
+    // Try to match current directory with a package directory
+    if let Some(ref canonical_current) = canonical_current_dir
+        && let Some((pkg, _)) = packages_with_dirs
+            .iter()
+            .find(|(_, pkg_dir)| pkg_dir == canonical_current)
+    {
+        return Ok(pkg.clone());
+    }
+
+    // Also try matching the manifest path directly (for cases where Cargo.toml is
+    // in current dir)
+    let current_manifest = current_dir.join("Cargo.toml");
+    let (canonical_current_manifest, packages_with_manifests) = tokio::task::spawn_blocking({
         let packages = metadata.packages.clone();
         let current = current_manifest.clone();
         move || {
-            let canonical_current = current.canonicalize().ok();
-            let packages_with_paths: Vec<_> = packages
+            let canonical_current_manifest = current.canonicalize().ok();
+            let packages_with_manifests: Vec<_> = packages
                 .iter()
                 .filter_map(|pkg| {
                     pkg.manifest_path
@@ -179,14 +255,14 @@ async fn find_package() -> Result<cargo_metadata::Package> {
                         .map(|p| (pkg.clone(), p))
                 })
                 .collect();
-            (canonical_current, packages_with_paths)
+            (canonical_current_manifest, packages_with_manifests)
         }
     })
     .await
     .context("Failed to spawn blocking task")?;
 
-    if let Some(ref canonical) = canonical_current
-        && let Some((pkg, _)) = packages_with_paths
+    if let Some(ref canonical) = canonical_current_manifest
+        && let Some((pkg, _)) = packages_with_manifests
             .iter()
             .find(|(_, pkg_path)| pkg_path == canonical)
     {
@@ -194,8 +270,29 @@ async fn find_package() -> Result<cargo_metadata::Package> {
     }
 
     // Fallback to root package (workspace root or single package)
-    metadata
-        .root_package()
-        .cloned()
-        .context("No package found in metadata")
+    if let Some(root_package) = metadata.root_package() {
+        return Ok(root_package.clone());
+    }
+
+    // If we're in a workspace without a root package, check for default-members
+    // This follows cargo's behavior: use default-members if available
+    // workspace_default_members implements Deref<Target = [PackageId]>, so we can
+    // use it as a slice It may not be available in older Cargo versions, so we
+    // check if it's available first
+    if metadata.workspace_default_members.is_available()
+        && !metadata.workspace_default_members.is_empty()
+        && let Some(first_default_id) = metadata.workspace_default_members.first()
+        && let Some(default_package) = metadata
+            .packages
+            .iter()
+            .find(|pkg| &pkg.id == first_default_id)
+    {
+        return Ok(default_package.clone());
+    }
+
+    // If no default-members, we need to be in a package directory
+    anyhow::bail!(
+        "No package found in current directory. Run this command from a package directory, \
+         or use --manifest-path to specify a package."
+    )
 }

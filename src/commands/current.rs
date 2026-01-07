@@ -25,7 +25,7 @@ use anyhow::{
     Context,
     Result,
 };
-use cargo_metadata::MetadataCommand;
+use cargo_plugin_utils::common::find_package;
 use clap::Parser;
 
 /// Arguments for the `current` command.
@@ -99,44 +99,14 @@ pub struct CurrentArgs {
 /// version=0.1.2
 /// ```
 pub fn current(args: CurrentArgs) -> Result<()> {
-    // Use cargo_metadata idiomatically - it automatically handles --manifest-path
-    let mut cmd = MetadataCommand::new();
-    if let Some(manifest_path) = &args.manifest_path {
-        cmd.manifest_path(manifest_path);
-    }
+    let mut logger = cargo_plugin_utils::logger::Logger::new();
 
-    let metadata = cmd
-        .exec()
-        .context("Failed to get cargo metadata. Make sure you're in a Cargo project.")?;
-
-    // Get version from metadata (workspace or root package)
-    let version = if !metadata.workspace_members.is_empty() {
-        // Check if root package is in workspace
-        if let Some(root_package) = metadata.root_package()
-            && metadata.workspace_members.contains(&root_package.id)
-        {
-            root_package.version.to_string()
-        } else if let Some(first_member_id) = metadata.workspace_members.first()
-            && let Some(workspace_package) = metadata
-                .packages
-                .iter()
-                .find(|pkg| &pkg.id == first_member_id)
-        {
-            workspace_package.version.to_string()
-        } else {
-            metadata
-                .root_package()
-                .context("No package found in metadata")?
-                .version
-                .to_string()
-        }
-    } else {
-        metadata
-            .root_package()
-            .context("No package found in metadata")?
-            .version
-            .to_string()
-    };
+    logger.status("Reading", "package version");
+    // Use find_package which automatically handles --manifest-path and workspace
+    // logic
+    let package = find_package(args.manifest_path.as_deref())?;
+    let version = package.version.to_string();
+    logger.finish();
 
     match args.format.as_str() {
         "version" => println!("{}", version),
@@ -163,18 +133,47 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let manifest_path = dir.path().join("Cargo.toml");
         std::fs::write(&manifest_path, content).unwrap();
+
+        // Create src directory with a minimal lib.rs for cargo metadata to work
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("lib.rs"), "// Test library\n").unwrap();
+
         dir
     }
 
     #[test]
     fn test_current_workspace_version() {
-        let _dir = create_temp_cargo_project(
+        let _dir = tempfile::tempdir().unwrap();
+        // Create workspace root Cargo.toml (no [package] section)
+        std::fs::write(
+            _dir.path().join("Cargo.toml"),
             r#"
 [workspace.package]
 version = "0.1.2"
+
+[workspace]
+members = ["member1"]
 "#,
-        );
-        let manifest_path = _dir.path().join("Cargo.toml");
+        )
+        .unwrap();
+
+        // Create member package
+        let member_dir = _dir.path().join("member1");
+        std::fs::create_dir_all(member_dir.join("src")).unwrap();
+        std::fs::write(
+            member_dir.join("Cargo.toml"),
+            r#"
+[package]
+name = "member1"
+version.workspace = true
+"#,
+        )
+        .unwrap();
+        std::fs::write(member_dir.join("src").join("lib.rs"), "// Test library\n").unwrap();
+
+        // Test from the member package directory (where we'd normally run the command)
+        let manifest_path = member_dir.join("Cargo.toml");
         let args = CurrentArgs {
             manifest_path: Some(manifest_path),
             format: "version".to_string(),
@@ -194,11 +193,16 @@ version = "1.2.3"
         );
         let manifest_path = _dir.path().join("Cargo.toml");
         let args = CurrentArgs {
-            manifest_path: Some(manifest_path),
+            manifest_path: Some(manifest_path.clone()),
             format: "version".to_string(),
             github_output: None,
         };
-        assert!(current(args).is_ok());
+        let result = current(args);
+        if let Err(e) = &result {
+            eprintln!("Error in test_current_package_version: {}", e);
+            eprintln!("Manifest path: {:?}", manifest_path);
+        }
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -271,6 +275,8 @@ version = "1.0.0"
 
     #[test]
     fn test_current_no_version() {
+        // Cargo defaults to "0.0.0" when no version is specified, so this should
+        // succeed
         let _dir = create_temp_cargo_project(
             r#"
 [package]
@@ -283,6 +289,11 @@ name = "test"
             format: "version".to_string(),
             github_output: None,
         };
-        assert!(current(args).is_err());
+        // Cargo defaults to 0.0.0, so this should succeed
+        let result = current(args);
+        assert!(result.is_ok());
+        // Verify it returns the default version
+        // (We can't easily capture stdout in this test, but the function should
+        // complete)
     }
 }

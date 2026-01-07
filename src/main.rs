@@ -29,6 +29,7 @@ use cargo_version_info::commands::{
     PostBumpHookArgs,
     PrLogArgs,
     PreBumpHookArgs,
+    ReleasePageArgs,
     RustToolchainArgs,
     TagArgs,
     UpdateReadmeArgs,
@@ -125,6 +126,9 @@ enum VersionInfoCommand {
     /// Generate PR log from merged pull requests
     #[command(name = "pr-log")]
     PrLog(PrLogArgs),
+    /// Generate complete release page with badges, PR log, and changelog
+    #[command(name = "release-page")]
+    ReleasePage(ReleasePageArgs),
     /// Generate badges for quality metrics
     #[command(name = "badge")]
     Badge(BadgeArgs),
@@ -204,6 +208,7 @@ fn main() -> Result<()> {
                 VersionInfoCommand::PostBumpHook(args) => commands::post_bump_hook(args),
                 VersionInfoCommand::Changelog(args) => commands::changelog(args),
                 VersionInfoCommand::PrLog(args) => commands::pr_log(args),
+                VersionInfoCommand::ReleasePage(args) => commands::release_page(args),
                 VersionInfoCommand::Badge(args) => commands::badge(args),
                 VersionInfoCommand::UpdateReadme(args) => commands::update_readme(args),
                 VersionInfoCommand::Version => commands::build_version_default(),

@@ -29,10 +29,9 @@ use bstr::{
     BString,
     ByteSlice,
 };
+use cargo_plugin_utils::common::get_owner_repo;
 use clap::Parser;
 use regex::Regex;
-
-use crate::commands::common::get_owner_repo;
 
 /// Arguments for the `changelog` command.
 #[derive(Parser, Debug)]
@@ -158,9 +157,12 @@ fn format_commit_entry(commit: &Commit, owner: &str, repo: &str) -> String {
     output
 }
 
-/// Generate changelog from git commits.
-pub fn changelog(args: ChangelogArgs) -> Result<()> {
-    let (owner, repo) = get_owner_repo(args.owner, args.repo)?;
+/// Generate changelog to a writer.
+pub fn generate_changelog_to_writer(
+    writer: &mut dyn std::io::Write,
+    args: ChangelogArgs,
+) -> Result<()> {
+    let (owner, repo) = get_owner_repo(args.owner.clone(), args.repo.clone())?;
 
     // Discover git repository
     let git_repo = gix::discover(".").context("Failed to discover git repository")?;
@@ -357,12 +359,25 @@ pub fn changelog(args: ChangelogArgs) -> Result<()> {
         output.push_str("No changes found.\n");
     }
 
-    // Write output
-    if let Some(output_path) = args.output {
-        std::fs::write(&output_path, output)
-            .with_context(|| format!("Failed to write changelog to {}", output_path))?;
+    // Write to the provided writer
+    write!(writer, "{}", output)?;
+
+    Ok(())
+}
+
+/// Generate changelog from git commits.
+pub fn changelog(args: ChangelogArgs) -> Result<()> {
+    let output_path = args.output.clone();
+
+    if let Some(ref path) = output_path {
+        // Write to file
+        let mut file = std::fs::File::create(path)
+            .with_context(|| format!("Failed to create file {}", path))?;
+        generate_changelog_to_writer(&mut file, args)?;
     } else {
-        print!("{}", output);
+        // Write to stdout
+        let mut stdout = std::io::stdout();
+        generate_changelog_to_writer(&mut stdout, args)?;
     }
 
     Ok(())

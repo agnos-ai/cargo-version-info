@@ -1,11 +1,10 @@
 //! Generate test coverage badge.
 
-use std::process::Command;
-
 use anyhow::{
     Context,
     Result,
 };
+use portable_pty::CommandBuilder;
 use serde::{
     Deserialize,
     Serialize,
@@ -14,9 +13,16 @@ use serde::{
 use super::common;
 
 /// Show the test coverage badge.
-pub async fn badge_coverage(package: &cargo_metadata::Package) -> Result<()> {
+pub async fn badge_coverage(
+    writer: &mut dyn std::io::Write,
+    package: &cargo_metadata::Package,
+) -> Result<()> {
+    let mut logger = cargo_plugin_utils::logger::Logger::new();
+    // Use ephemeral status (cyan) for subprocess operations
+    logger.status("Generating", "coverage badge");
+
     // Try to get coverage using cargo-llvm-cov
-    let coverage = get_coverage_percentage(package).await?;
+    let coverage = get_coverage_percentage(&mut logger, package).await?;
 
     if let Some(coverage) = coverage {
         // Determine badge color based on coverage percentage
@@ -49,7 +55,7 @@ pub async fn badge_coverage(package: &cargo_metadata::Package) -> Result<()> {
         };
 
         let badge_markdown = format!("[![Coverage]({})]({})", badge_url, link_target);
-        println!("{}", badge_markdown);
+        writeln!(writer, "{}", badge_markdown)?;
     }
 
     Ok(())
@@ -68,7 +74,10 @@ struct CoverageCache {
 
 /// Get test coverage percentage using cargo-llvm-cov.
 /// Uses cache if available and valid.
-async fn get_coverage_percentage(package: &cargo_metadata::Package) -> Result<Option<u8>> {
+async fn get_coverage_percentage(
+    logger: &mut cargo_plugin_utils::logger::Logger,
+    package: &cargo_metadata::Package,
+) -> Result<Option<u8>> {
     // Try to load from cache first
     if let Some(cached) = load_coverage_cache(package).await? {
         let current_key = common::compute_cache_key(package).await?;
@@ -78,19 +87,19 @@ async fn get_coverage_percentage(package: &cargo_metadata::Package) -> Result<Op
     }
 
     // Check if cargo-llvm-cov is available
-    let version_check = tokio::task::spawn_blocking(|| {
-        Command::new("cargo")
-            .args(["llvm-cov", "--version"])
-            .output()
-    })
-    .await
-    .context("Failed to spawn blocking task")?;
+    let version_output = cargo_plugin_utils::logger::run_subprocess(
+        logger,
+        || {
+            let mut cmd = CommandBuilder::new("cargo");
+            cmd.arg("llvm-cov");
+            cmd.arg("--version");
+            cmd
+        },
+        None,
+    )
+    .await?;
 
-    let has_llvm_cov = version_check
-        .map(|output| output.status.success())
-        .unwrap_or(false);
-
-    if !has_llvm_cov {
+    if !version_output.success() {
         eprintln!(
             "Warning: cargo-llvm-cov is not installed. Install it with: cargo binstall cargo-llvm-cov (or cargo install cargo-llvm-cov)"
         );
@@ -98,35 +107,30 @@ async fn get_coverage_percentage(package: &cargo_metadata::Package) -> Result<Op
     }
 
     // Run cargo llvm-cov to get coverage
-    let output_result = tokio::task::spawn_blocking({
-        let package_name = package.name.clone();
+    let package_name = package.name.clone();
+    let output = cargo_plugin_utils::logger::run_subprocess(
+        logger,
         move || {
-            Command::new("cargo")
-                .args([
-                    "llvm-cov",
-                    "--package",
-                    &package_name,
-                    "--summary-only",
-                    "--json",
-                ])
-                .output()
-        }
-    })
-    .await
-    .context("Failed to spawn blocking task")?;
+            let mut cmd = CommandBuilder::new("cargo");
+            cmd.arg("llvm-cov");
+            cmd.arg("--package");
+            cmd.arg(package_name.as_str());
+            cmd.arg("--summary-only");
+            cmd.arg("--json");
+            cmd
+        },
+        None,
+    )
+    .await?;
 
-    let output = match output_result {
-        Ok(out) => out,
-        Err(_) => return Ok(None),
-    };
-
-    if !output.status.success() {
+    if !output.success() {
         return Ok(None);
     }
 
     // Parse JSON output to extract coverage percentage
-    let stdout =
-        String::from_utf8(output.stdout).context("Failed to parse cargo-llvm-cov output")?;
+    let stdout = output
+        .stdout_str()
+        .context("Failed to parse cargo-llvm-cov output")?;
 
     // cargo-llvm-cov JSON format: {"data": [{"totals": {"lines": {"percent": 85.5},
     // ...}}], ...}

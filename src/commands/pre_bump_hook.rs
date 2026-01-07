@@ -31,9 +31,9 @@ use anyhow::{
     Context,
     Result,
 };
+use cargo_plugin_utils::common::get_package_version_from_manifest;
 use clap::Parser;
 
-use super::common::get_package_version_from_manifest;
 use crate::version::parse_version;
 
 /// Arguments for the `pre-bump-hook` command.
@@ -136,6 +136,9 @@ pub struct PreBumpHookArgs {
 ///   Target version: 1.0.0
 /// ```
 pub fn pre_bump_hook(args: PreBumpHookArgs) -> Result<()> {
+    let mut logger = cargo_plugin_utils::logger::Logger::new();
+
+    logger.status("Reading", "package version");
     // Get current version from Cargo.toml using cargo_metadata (idiomatic way)
     let manifest_path = args
         .manifest_path
@@ -144,6 +147,7 @@ pub fn pre_bump_hook(args: PreBumpHookArgs) -> Result<()> {
     let cargo_version = get_package_version_from_manifest(manifest_path)
         .with_context(|| format!("Failed to get version from {}", manifest_path.display()))?;
 
+    logger.status("Checking", "git tags");
     // Get latest git tag version
     let latest_tag = std::process::Command::new("git")
         .arg("describe")
@@ -167,6 +171,8 @@ pub fn pre_bump_hook(args: PreBumpHookArgs) -> Result<()> {
         .unwrap_or(&latest_tag)
         .trim()
         .to_string();
+
+    logger.finish();
 
     // Verify Cargo.toml version matches latest tag (if tag exists)
     if latest_tag_version != "0.0.0" && cargo_version != latest_tag_version {
@@ -199,10 +205,10 @@ pub fn pre_bump_hook(args: PreBumpHookArgs) -> Result<()> {
         }
     }
 
-    println!("✓ Pre-bump checks passed");
-    println!("  Current version: {}", cargo_version);
+    logger.print_message("✓ Pre-bump checks passed");
+    logger.print_message(&format!("  Current version: {}", cargo_version));
     if let Some(target) = &args.target_version {
-        println!("  Target version: {}", target.trim());
+        logger.print_message(&format!("  Target version: {}", target.trim()));
     }
 
     Ok(())

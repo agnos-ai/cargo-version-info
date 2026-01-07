@@ -32,9 +32,8 @@ use anyhow::{
     Context,
     Result,
 };
+use cargo_plugin_utils::common::get_package_version_from_manifest;
 use clap::Parser;
-
-use super::common::get_package_version_from_manifest;
 
 /// Arguments for the `post-bump-hook` command.
 #[derive(Parser, Debug)]
@@ -135,6 +134,9 @@ pub struct PostBumpHookArgs {
 /// Error: Version bump appears to have failed
 /// ```
 pub fn post_bump_hook(args: PostBumpHookArgs) -> Result<()> {
+    let mut logger = cargo_plugin_utils::logger::Logger::new();
+
+    logger.status("Reading", "package version");
     // Get current version from Cargo.toml (after cog bump) using cargo_metadata
     let manifest_path = args
         .manifest_path
@@ -142,6 +144,7 @@ pub fn post_bump_hook(args: PostBumpHookArgs) -> Result<()> {
         .unwrap_or_else(|| std::path::Path::new("./Cargo.toml"));
     let cargo_version = get_package_version_from_manifest(manifest_path)
         .with_context(|| format!("Failed to get version from {}", manifest_path.display()))?;
+    logger.finish();
 
     // If target version is provided, verify it matches
     if let Some(target) = &args.target_version {
@@ -155,11 +158,11 @@ pub fn post_bump_hook(args: PostBumpHookArgs) -> Result<()> {
                 anyhow::bail!("Version bump verification failed");
             }
         } else {
-            println!("✓ Version bump verified: {}", cargo_version);
+            logger.print_message(&format!("✓ Version bump verified: {}", cargo_version));
         }
     } else {
-        println!("✓ Post-bump check passed");
-        println!("  Current version: {}", cargo_version);
+        logger.print_message("✓ Post-bump check passed");
+        logger.print_message(&format!("  Current version: {}", cargo_version));
     }
 
     // Verify version changed from previous
@@ -174,8 +177,8 @@ pub fn post_bump_hook(args: PostBumpHookArgs) -> Result<()> {
                 anyhow::bail!("Version bump appears to have failed");
             }
         } else {
-            println!("  Previous version: {}", previous_trimmed);
-            println!("  New version: {}", cargo_version);
+            logger.print_message(&format!("  Previous version: {}", previous_trimmed));
+            logger.print_message(&format!("  New version: {}", cargo_version));
         }
     }
 
@@ -190,6 +193,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let manifest_path = dir.path().join("Cargo.toml");
         std::fs::write(&manifest_path, content).unwrap();
+
+        // Create src directory with a minimal lib.rs for cargo metadata to work
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("lib.rs"), "// Test library\n").unwrap();
+
         dir
     }
 
@@ -307,6 +316,8 @@ version = "1.5.0"
 
     #[test]
     fn test_post_bump_hook_no_version() {
+        // Cargo defaults to "0.0.0" when no version is specified, so this should
+        // succeed
         let _dir = create_temp_cargo_project(
             r#"
 [package]
@@ -321,7 +332,8 @@ name = "test"
             previous_version: None,
             exit_on_error: true,
         };
-        assert!(post_bump_hook(args).is_err());
+        // Cargo defaults to 0.0.0, so this should succeed
+        assert!(post_bump_hook(args).is_ok());
     }
 
     #[test]
@@ -349,12 +361,33 @@ version = "0.9.1"
 
     #[test]
     fn test_post_bump_hook_workspace_version() {
-        let _dir = create_temp_cargo_project(
+        let _dir = tempfile::tempdir().unwrap();
+        // Create workspace root Cargo.toml (no [package] section)
+        std::fs::write(
+            _dir.path().join("Cargo.toml"),
             r#"
 [workspace.package]
 version = "2.1.0"
+
+[workspace]
+members = ["member1"]
 "#,
-        );
+        )
+        .unwrap();
+
+        // Create member package
+        let member_dir = _dir.path().join("member1");
+        std::fs::create_dir_all(member_dir.join("src")).unwrap();
+        std::fs::write(
+            member_dir.join("Cargo.toml"),
+            r#"
+[package]
+name = "member1"
+version.workspace = true
+"#,
+        )
+        .unwrap();
+        std::fs::write(member_dir.join("src").join("lib.rs"), "// Test library\n").unwrap();
         let manifest_path = _dir.path().join("Cargo.toml");
         let args = PostBumpHookArgs {
             manifest_path: Some(manifest_path),

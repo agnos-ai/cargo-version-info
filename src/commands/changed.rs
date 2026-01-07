@@ -25,9 +25,8 @@ use anyhow::{
     Context,
     Result,
 };
+use cargo_plugin_utils::common::get_package_version_from_manifest;
 use clap::Parser;
-
-use super::common::get_package_version_from_manifest;
 
 /// Arguments for the `changed` command.
 #[derive(Parser, Debug)]
@@ -131,6 +130,10 @@ pub struct ChangedArgs {
 /// latest_tag_version=0.1.0
 /// ```
 pub fn changed(args: ChangedArgs) -> Result<()> {
+    // Suppress progress when outputting to stdout (bool/json formats)
+    let mut logger = cargo_plugin_utils::logger::Logger::new();
+
+    logger.status("Reading", "package version");
     // Get current version from Cargo.toml using cargo_metadata (idiomatic way)
     let manifest_path = args
         .manifest_path
@@ -138,6 +141,8 @@ pub fn changed(args: ChangedArgs) -> Result<()> {
         .unwrap_or_else(|| std::path::Path::new("./Cargo.toml"));
     let cargo_version = get_package_version_from_manifest(manifest_path)
         .with_context(|| format!("Failed to get version from {}", manifest_path.display()))?;
+
+    logger.status("Checking", "git tags");
 
     // Find latest tag using git describe (simpler and more reliable)
     let latest_tag = std::process::Command::new("git")
@@ -164,6 +169,7 @@ pub fn changed(args: ChangedArgs) -> Result<()> {
         .to_string();
 
     let changed = cargo_version != latest_tag_version;
+    logger.finish();
 
     match args.format.as_str() {
         "bool" => println!("{}", changed),
