@@ -2,6 +2,7 @@
 
 mod badge;
 mod build_version;
+pub mod bump;
 mod changed;
 pub mod changelog;
 mod compare;
@@ -29,6 +30,10 @@ pub use build_version::{
     build_version_default,
     build_version_for_repo,
     compute_version_string,
+};
+pub use bump::{
+    BumpArgs,
+    bump,
 };
 pub use changed::{
     ChangedArgs,

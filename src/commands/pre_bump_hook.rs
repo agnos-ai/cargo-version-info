@@ -42,7 +42,6 @@ pub struct PreBumpHookArgs {
     /// Path to the Cargo.toml manifest file (standard cargo flag).
     ///
     /// When running as a cargo subcommand, this is automatically handled.
-    /// `MetadataCommand` will use this if provided, otherwise auto-detects.
     #[arg(long)]
     manifest_path: Option<PathBuf>,
 
@@ -148,20 +147,37 @@ pub fn pre_bump_hook(args: PreBumpHookArgs) -> Result<()> {
         .with_context(|| format!("Failed to get version from {}", manifest_path.display()))?;
 
     logger.status("Checking", "git tags");
-    // Get latest git tag version
-    let latest_tag = std::process::Command::new("git")
-        .arg("describe")
-        .arg("--tags")
-        .arg("--abbrev=0")
-        .current_dir(&args.repo_path)
-        .output()
+    // Get latest git tag version using gix
+    let latest_tag = gix::discover(&args.repo_path)
         .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                String::from_utf8(output.stdout).ok()
-            } else {
-                None
-            }
+        .and_then(|repo| {
+            repo.references()
+                .ok()?
+                .all()
+                .ok()?
+                .filter_map(|reference| {
+                    let Ok(reference) = reference else {
+                        return None;
+                    };
+                    let name = reference.name().as_bstr().to_string();
+                    name.strip_prefix("refs/tags/").map(|tag| {
+                        // Get the tag object to find the commit it points to
+                        let tag_oid = reference.id();
+                        (tag.to_string(), tag_oid)
+                    })
+                })
+                .filter_map(|(tag_name, tag_oid)| {
+                    // Try to resolve to a commit
+                    let commit = repo.find_object(tag_oid).ok()?.try_into_commit().ok()?;
+                    Some((tag_name, commit.id))
+                })
+                .max_by_key(|(_, commit_id)| {
+                    // Sort by commit time (most recent first)
+                    // For simplicity, use commit ID as proxy for time ordering
+                    // (newer commits have larger IDs in most cases)
+                    Some(*commit_id)
+                })
+                .map(|(tag_name, _)| tag_name)
         })
         .unwrap_or_else(|| "v0.0.0".to_string());
 

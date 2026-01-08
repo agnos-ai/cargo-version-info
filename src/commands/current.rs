@@ -34,7 +34,6 @@ pub struct CurrentArgs {
     /// Path to the Cargo.toml manifest file (standard cargo flag).
     ///
     /// When running as a cargo subcommand, this is automatically handled.
-    /// `MetadataCommand` will use this if provided, otherwise auto-detects.
     #[arg(long)]
     manifest_path: Option<PathBuf>,
 

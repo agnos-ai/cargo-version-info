@@ -18,6 +18,7 @@ use cargo_version_info::commands;
 use cargo_version_info::commands::{
     BadgeArgs,
     BuildVersionArgs,
+    BumpArgs,
     ChangedArgs,
     ChangelogArgs,
     CompareArgs,
@@ -114,6 +115,9 @@ enum VersionInfoCommand {
     /// Check if Cargo.toml version changed since last git tag
     #[command(name = "changed")]
     Changed(ChangedArgs),
+    /// Bump version in Cargo.toml and commit changes (does not create tags)
+    #[command(name = "bump")]
+    Bump(BumpArgs),
     /// Pre-bump hook for cog integration (verifies state before bumping)
     #[command(name = "pre-bump-hook")]
     PreBumpHook(PreBumpHookArgs),
@@ -204,6 +208,7 @@ fn main() -> Result<()> {
                 VersionInfoCommand::Dioxus(args) => commands::dioxus(args),
                 VersionInfoCommand::BuildVersion(args) => commands::build_version(args),
                 VersionInfoCommand::Changed(args) => commands::changed(args),
+                VersionInfoCommand::Bump(args) => commands::bump(args),
                 VersionInfoCommand::PreBumpHook(args) => commands::pre_bump_hook(args),
                 VersionInfoCommand::PostBumpHook(args) => commands::post_bump_hook(args),
                 VersionInfoCommand::Changelog(args) => commands::changelog(args),

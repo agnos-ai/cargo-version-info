@@ -52,17 +52,18 @@ I've copied three reusable composite actions to:
 
 ```yaml
 - name: Install cocogitto
-  run: cargo install --locked cocogitto  # Takes 2-5 minutes!
+  run: cargo install --locked cocogitto # Takes 2-5 minutes!
 ```
 
 **After (fast):**
 
 ```yaml
 - name: Setup Cocogitto
-  uses: ./.github/actions/setup-cocogitto  # Takes ~5 seconds, cached = instant
+  uses: ./.github/actions/setup-cocogitto # Takes ~5 seconds, cached = instant
 ```
 
-**Applied to:** `cargo-fmt-toml/.github/workflows/auto-version-bump.yml`
+**Applied to:**
+`cargo-fmt-toml/.github/workflows/auto-version-bump.yml`
 
 ---
 
@@ -106,7 +107,8 @@ I've copied three reusable composite actions to:
     output-file: CHANGELOG.md
 ```
 
-**Applied to:** `cargo-fmt-toml/.github/workflows/auto-version-bump.yml`
+**Applied to:**
+`cargo-fmt-toml/.github/workflows/auto-version-bump.yml`
 
 ---
 
@@ -165,12 +167,12 @@ repo/
 - uses: dtolnay/rust-toolchain@stable
 
 - name: Setup Cocogitto (cached)
-  uses: ./.github/actions/setup-cocogitto    # ⚡ ~5s first run, instant after
+  uses: ./.github/actions/setup-cocogitto # ⚡ ~5s first run, instant after
 
 # ... version bump ...
 
 - name: Generate changelog
-  uses: ./.github/actions/generate-changelog    # ✨ Clean and simple
+  uses: ./.github/actions/generate-changelog # ✨ Clean and simple
   with:
     release-tag: v${{ env.NEW_VERSION }}
     output-file: CHANGELOG_RELEASE.md
@@ -178,7 +180,8 @@ repo/
 
 ### Benefits:
 
-- ⚡ **Faster:** 2-5 minutes → 5 seconds (first run) → instant (cached)
+- ⚡ **Faster:** 2-5 minutes → 5 seconds (first run) → instant
+  (cached)
 - 🧹 **Cleaner:** Less inline bash, more declarative
 - 🔒 **Consistent:** Same cocogitto version across all repos
 - 📝 **Better:** Smarter changelog generation
@@ -219,11 +222,11 @@ These actions can be used in any workflow that needs:
 
 ### Cocogitto Installation Time:
 
-| Method                        | First Run | Cached   |
-| ----------------------------- | --------- | -------- |
-| `cargo install --locked`      | 2-5 min   | 2-5 min  |
-| `cargo-binstall` (manual)     | ~10 sec   | ~10 sec  |
-| **`setup-cocogitto` (action)**| **~5 sec**| **~1 sec**|
+| Method                         | First Run  | Cached     |
+| ------------------------------ | ---------- | ---------- |
+| `cargo install --locked`       | 2-5 min    | 2-5 min    |
+| `cargo-binstall` (manual)      | ~10 sec    | ~10 sec    |
+| **`setup-cocogitto` (action)** | **~5 sec** | **~1 sec** |
 
 **Savings:**
 

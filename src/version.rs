@@ -40,6 +40,16 @@ pub fn increment_patch(major: u32, minor: u32, patch: u32) -> (u32, u32, u32) {
     (major, minor, patch + 1)
 }
 
+/// Increment minor version (resets patch to 0).
+pub fn increment_minor(major: u32, minor: u32, _patch: u32) -> (u32, u32, u32) {
+    (major, minor + 1, 0)
+}
+
+/// Increment major version (resets minor and patch to 0).
+pub fn increment_major(major: u32, _minor: u32, _patch: u32) -> (u32, u32, u32) {
+    (major + 1, 0, 0)
+}
+
 /// Format version as string.
 pub fn format_version(major: u32, minor: u32, patch: u32) -> String {
     format!("{}.{}.{}", major, minor, patch)
@@ -89,6 +99,18 @@ mod tests {
     fn test_increment_patch() {
         assert_eq!(increment_patch(0, 1, 2), (0, 1, 3));
         assert_eq!(increment_patch(1, 0, 0), (1, 0, 1));
+    }
+
+    #[test]
+    fn test_increment_minor() {
+        assert_eq!(increment_minor(0, 1, 2), (0, 2, 0));
+        assert_eq!(increment_minor(1, 0, 5), (1, 1, 0));
+    }
+
+    #[test]
+    fn test_increment_major() {
+        assert_eq!(increment_major(0, 1, 2), (1, 0, 0));
+        assert_eq!(increment_major(1, 5, 10), (2, 0, 0));
     }
 
     #[test]
