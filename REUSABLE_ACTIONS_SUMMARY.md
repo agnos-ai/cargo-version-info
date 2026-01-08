@@ -269,7 +269,9 @@ generation, use these actions instead of inline scripts.
 
 ## 📚 Documentation
 
-**See:** `.github/actions/README.md` in each repository for:
+**See:**
+[dataroadinc/github-actions](https://github.com/dataroadinc/github-actions)
+for complete documentation of all shared actions.
 
 - Detailed usage examples
 - Complete API documentation
