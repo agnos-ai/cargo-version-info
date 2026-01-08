@@ -194,7 +194,7 @@ use super::diff;
 /// - Tree: Built from the staged index
 /// - Parents: Current HEAD commit
 /// - Author/Committer: From git config or defaults
-/// - Message: Conventional commit format "chore: bump version X -> Y"
+/// - Message: Conventional commit format "chore(version): bump X -> Y"
 ///
 /// ## HEAD Update
 ///
@@ -527,10 +527,7 @@ fn create_commit(
     new_version: &str,
 ) -> Result<gix::ObjectId> {
     // Create commit message following conventional commits format
-    let commit_message = format!(
-        "chore: bump version from {} to {}",
-        old_version, new_version
-    );
+    let commit_message = format!("chore(version): bump {} -> {}", old_version, new_version);
 
     // Get author and committer from git config
     let author = get_signature_from_config(repo)?;

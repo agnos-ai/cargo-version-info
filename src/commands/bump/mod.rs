@@ -94,7 +94,7 @@
 //!
 //! Commit messages follow the conventional commits format:
 //! ```text
-//! chore: bump version from X.Y.Z to X.Y.Z
+//! chore(version): bump X.Y.Z -> X.Y.Z
 //! ```
 //!
 //! The `chore` type indicates this is a maintenance task, not a feature or fix.
@@ -223,7 +223,7 @@ use crate::version::{
 ///
 /// Commits use the conventional commits format:
 /// ```text
-/// chore: bump version from 0.1.0 to 0.2.0
+/// chore(version): bump 0.1.0 -> 0.2.0
 /// ```
 ///
 /// This format:
