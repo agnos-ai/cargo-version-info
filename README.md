@@ -212,9 +212,9 @@ let version = String::from_utf8(output.stdout)?;
 
 This tool is designed to replace:
 
-1. **GitHub Actions**:
-   `.github/actions/calculate-next-version/action.yml` and
-   `.github/actions/get-version/action.yml`
+1. **GitHub Actions**: See
+   [dataroadinc/github-actions](https://github.com/dataroadinc/github-actions)
+   for `calculate-next-version` and `get-version` actions
 2. **Bash scripts**: Version extraction in `.bash/*.sh` files
 3. **Rust build scripts**: Version resolution in
    `crates/ekg-util-env/build.rs` (can call this tool)
