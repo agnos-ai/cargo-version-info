@@ -377,6 +377,37 @@ fn create_test_git_repo_with_gix(dir: &std::path::Path, initial_content: &str) -
         }))
         .expect("Failed to commit transaction");
 
+    // Set HEAD to point to refs/heads/main using a separate transaction
+    // HEAD must point to a branch for bump to work correctly
+    let main_ref_name: gix::refs::FullName =
+        "refs/heads/main".try_into().expect("Invalid ref name");
+    repo.refs
+        .transaction()
+        .prepare(
+            vec![gix::refs::transaction::RefEdit {
+                change: gix::refs::transaction::Change::Update {
+                    log: gix::refs::transaction::LogChange {
+                        mode: gix::refs::transaction::RefLog::AndReference,
+                        force_create_reflog: false,
+                        message: "initial commit".into(),
+                    },
+                    expected: gix::refs::transaction::PreviousValue::Any,
+                    new: gix::refs::Target::Symbolic(main_ref_name),
+                },
+                name: "HEAD".try_into().expect("Invalid ref name"),
+                deref: false,
+            }],
+            gix::lock::acquire::Fail::Immediately,
+            gix::lock::acquire::Fail::Immediately,
+        )
+        .expect("Failed to prepare HEAD transaction")
+        .commit(Some(gix::actor::SignatureRef {
+            name: "Test User".into(),
+            email: "test@example.com".into(),
+            time: "1234567890 +0000",
+        }))
+        .expect("Failed to commit HEAD transaction");
+
     // Set user.name and user.email in repo config for bump command
     let config_path = repo.path().join("config");
     let config_content = std::fs::read_to_string(&config_path).unwrap_or_else(|_| String::new());
