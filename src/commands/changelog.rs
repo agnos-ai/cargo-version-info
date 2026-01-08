@@ -178,13 +178,31 @@ pub fn generate_changelog_to_writer(
         let end_ref = parts[1].trim();
 
         // Resolve references using rev_parse
-        let start_bstr: BString = start_ref.into();
-        let start_spec = git_repo
-            .rev_parse(start_bstr.as_bstr())
-            .with_context(|| format!("Failed to resolve start reference: {}", start_ref))?;
-        let start_oid = start_spec
-            .single()
-            .context("Start reference resolved to multiple objects")?;
+        // If start reference doesn't exist, treat it as if there's no start point
+        let start_oid = {
+            let start_bstr: BString = start_ref.into();
+            match git_repo.rev_parse(start_bstr.as_bstr()) {
+                Ok(start_spec) => match start_spec.single() {
+                    Some(oid) => Some(oid),
+                    None => {
+                        eprintln!(
+                            "Warning: Start reference '{}' resolved to multiple objects, \
+                                 ignoring start point and generating changelog from beginning",
+                            start_ref
+                        );
+                        None
+                    }
+                },
+                Err(_) => {
+                    eprintln!(
+                        "Warning: Start reference '{}' not found in repository, \
+                         generating changelog from beginning",
+                        start_ref
+                    );
+                    None
+                }
+            }
+        };
 
         let end_bstr: BString = end_ref.into();
         let end_spec = git_repo
@@ -194,7 +212,7 @@ pub fn generate_changelog_to_writer(
             .single()
             .context("End reference resolved to multiple objects")?;
 
-        (Some(start_oid), end_oid)
+        (start_oid, end_oid)
     } else if let Some(tag) = &args.at {
         // Generate changelog for commits up to this tag
         let tag_bstr: BString = tag.as_str().into();
