@@ -108,17 +108,65 @@ async fn get_latest_release_via_api(
     Ok(version.to_string())
 }
 
-/// Calculate next patch version from latest GitHub release.
+/// Get the latest version from git tags.
+///
+/// Queries git tags in the current repository to find the latest semantic
+/// version tag. Returns None if no version tags exist.
+fn get_latest_git_tag_version() -> Result<Option<String>> {
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let repo = gix::discover(cwd)
+        .context("Failed to discover git repository. Ensure you're in a git repository.")?;
+
+    let mut version_tags: Vec<(String, (u32, u32, u32))> = repo
+        .references()?
+        .prefixed("refs/tags/")?
+        .filter_map(|r: Result<gix::Reference<'_>, _>| r.ok())
+        .filter_map(|r| {
+            let name_full = r.name().as_bstr().to_string();
+            let name = name_full.strip_prefix("refs/tags/").unwrap_or(&name_full);
+            let version_str = name
+                .strip_prefix('v')
+                .or_else(|| name.strip_prefix('V'))
+                .unwrap_or(name);
+
+            // Try to parse as semantic version
+            if let Ok((major, minor, patch)) = parse_version(version_str) {
+                Some((name.to_string(), (major, minor, patch)))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Sort tags by semantic version (major, minor, patch)
+    version_tags.sort_by(|a, b| a.1.cmp(&b.1));
+
+    Ok(version_tags
+        .last()
+        .map(|(tag_name, _): &(String, (u32, u32, u32))| {
+            tag_name
+                .strip_prefix('v')
+                .or_else(|| tag_name.strip_prefix('V'))
+                .unwrap_or(tag_name)
+                .to_string()
+        }))
+}
+
+/// Calculate next patch version from latest git tag.
+///
+/// Queries git tags in the current repository (not GitHub releases) to find
+/// the latest version. If no tags exist, returns "0.0.0" as latest and
+/// "0.0.1" as next.
 pub async fn calculate_next_version(
-    owner: &str,
-    repo: &str,
-    github_token: Option<&str>,
+    _owner: &str,
+    _repo: &str,
+    _github_token: Option<&str>,
 ) -> Result<(String, String)> {
-    // Get latest release
-    let latest_version_str = match get_latest_release_version(owner, repo, github_token).await? {
+    // Get latest version from git tags (not GitHub releases)
+    let latest_version_str = match get_latest_git_tag_version()? {
         Some(v) => v,
         None => {
-            // No releases yet, start at 0.0.1
+            // No tags yet, start at 0.0.1
             return Ok(("0.0.0".to_string(), "0.0.1".to_string()));
         }
     };
@@ -134,7 +182,140 @@ pub async fn calculate_next_version(
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
+    use tempfile::TempDir;
+
     use super::*;
+
+    fn create_test_git_repo_with_tags(tags: &[&str]) -> TempDir {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Initialize git repo
+        Command::new("git")
+            .arg("init")
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Create an initial commit
+        std::fs::write(dir.path().join("README.md"), "# Test\n").unwrap();
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Create tags
+        for tag in tags {
+            Command::new("git")
+                .args(["tag", "-a", tag, "-m", &format!("Release {}", tag)])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+        }
+
+        dir
+    }
+
+    #[test]
+    fn test_get_latest_git_tag_version_no_tags() {
+        let dir = create_test_git_repo_with_tags(&[]);
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = get_latest_git_tag_version().unwrap();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_get_latest_git_tag_version_single_tag() {
+        let _dir = create_test_git_repo_with_tags(&["v0.1.0"]);
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+        let result = get_latest_git_tag_version().unwrap();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert_eq!(result, Some("0.1.0".to_string()));
+    }
+
+    #[test]
+    fn test_get_latest_git_tag_version_multiple_tags() {
+        let _dir = create_test_git_repo_with_tags(&["v0.1.0", "v0.2.0", "v0.1.5"]);
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+        let result = get_latest_git_tag_version().unwrap();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        // Should return the latest version (0.2.0)
+        assert_eq!(result, Some("0.2.0".to_string()));
+    }
+
+    #[test]
+    fn test_get_latest_git_tag_version_without_v_prefix() {
+        let _dir = create_test_git_repo_with_tags(&["0.3.0", "v0.2.0"]);
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+        let result = get_latest_git_tag_version().unwrap();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        // Should return the latest version (0.3.0)
+        assert_eq!(result, Some("0.3.0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_calculate_next_version_no_tags() {
+        let _dir = create_test_git_repo_with_tags(&[]);
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+        let (latest, next) = calculate_next_version("test", "repo", None).await.unwrap();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert_eq!(latest, "0.0.0");
+        assert_eq!(next, "0.0.1");
+    }
+
+    #[tokio::test]
+    async fn test_calculate_next_version_with_tags() {
+        let _dir = create_test_git_repo_with_tags(&["v0.1.2"]);
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+        let (latest, next) = calculate_next_version("test", "repo", None).await.unwrap();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert_eq!(latest, "0.1.2");
+        assert_eq!(next, "0.1.3");
+    }
 
     #[tokio::test]
     #[ignore] // Requires network access
