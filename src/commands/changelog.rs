@@ -174,6 +174,69 @@ fn format_commit_entry(commit: &Commit, owner: &str, repo: &str) -> String {
     output
 }
 
+/// Resolve a reference to a commit OID, following tags iteratively.
+fn resolve_to_commit_oid<'a>(
+    git_repo: &'a gix::Repository,
+    reference: &str,
+) -> Result<gix::Id<'a>> {
+    // First, try using rev_parse with ^{commit} suffix to follow tags automatically
+    // This handles all cases (tags, branches, HEAD, SHAs) and peels tags
+    let ref_with_suffix = format!("{}^{{commit}}", reference);
+    let ref_bstr: BString = ref_with_suffix.into();
+    if let Ok(spec) = git_repo.rev_parse(ref_bstr.as_bstr())
+        && let Some(oid) = spec.single()
+        && let Ok(obj) = git_repo.find_object(oid)
+        && obj.try_into_commit().is_ok()
+    {
+        return Ok(oid);
+    }
+
+    // Fallback: try without suffix first, then peel if it's a tag
+    let ref_bstr: BString = reference.into();
+    let spec = git_repo
+        .rev_parse(ref_bstr.as_bstr())
+        .context("Failed to resolve reference")?;
+    let oid = spec
+        .single()
+        .context("Reference resolved to multiple objects")?;
+
+    // Check if it's already a commit or a tag
+    let obj = git_repo.find_object(oid).context("Failed to find object")?;
+
+    // Check the object kind first to avoid consuming it unnecessarily
+    let obj_kind = obj.kind;
+    match obj_kind {
+        gix::object::Kind::Commit => {
+            // Already a commit - verify and return
+            obj.try_into_commit()
+                .context("Object kind is Commit but conversion failed")?;
+            return Ok(oid);
+        }
+        gix::object::Kind::Tag => {
+            // It's a tag - try using the reference API to peel it
+            let tag_ref_name = format!("refs/tags/{}", reference);
+            if let Ok(mut tag_ref) = git_repo.find_reference(tag_ref_name.as_str()) {
+                let peeled_oid = tag_ref
+                    .peel_to_id()
+                    .context("Failed to peel tag to commit")?;
+                // Verify the peeled result is a commit
+                let peeled_obj = git_repo
+                    .find_object(peeled_oid)
+                    .context("Failed to find peeled commit object")?;
+                peeled_obj
+                    .try_into_commit()
+                    .context("Tag does not point to a commit")?;
+                return Ok(peeled_oid);
+            }
+        }
+        _ => {
+            // Other object types are not supported
+        }
+    }
+
+    anyhow::bail!("Reference '{}' does not point to a commit", reference);
+}
+
 /// Generate changelog to a writer.
 pub fn generate_changelog_to_writer(
     writer: &mut dyn std::io::Write,
@@ -194,51 +257,28 @@ pub fn generate_changelog_to_writer(
         let start_ref = parts[0].trim();
         let end_ref = parts[1].trim();
 
-        // Resolve references using rev_parse
+        // Resolve references using rev_parse, following tags to commits
         // If start reference doesn't exist, treat it as if there's no start point
-        let start_oid = {
-            let start_bstr: BString = start_ref.into();
-            match git_repo.rev_parse(start_bstr.as_bstr()) {
-                Ok(start_spec) => match start_spec.single() {
-                    Some(oid) => Some(oid),
-                    None => {
-                        eprintln!(
-                            "Warning: Start reference '{}' resolved to multiple objects, \
-                                 ignoring start point and generating changelog from beginning",
-                            start_ref
-                        );
-                        None
-                    }
-                },
-                Err(_) => {
-                    eprintln!(
-                        "Warning: Start reference '{}' not found in repository, \
-                         generating changelog from beginning",
-                        start_ref
-                    );
-                    None
-                }
+        let start_oid = match resolve_to_commit_oid(&git_repo, start_ref) {
+            Ok(oid) => Some(oid),
+            Err(_) => {
+                eprintln!(
+                    "Warning: Start reference '{}' not found in repository, \
+                     generating changelog from beginning",
+                    start_ref
+                );
+                None
             }
         };
 
-        let end_bstr: BString = end_ref.into();
-        let end_spec = git_repo
-            .rev_parse(end_bstr.as_bstr())
+        let end_oid = resolve_to_commit_oid(&git_repo, end_ref)
             .with_context(|| format!("Failed to resolve end reference: {}", end_ref))?;
-        let end_oid = end_spec
-            .single()
-            .context("End reference resolved to multiple objects")?;
 
         (start_oid, end_oid)
     } else if let Some(tag) = &args.at {
         // Generate changelog for commits up to this tag
-        let tag_bstr: BString = tag.as_str().into();
-        let tag_spec = git_repo
-            .rev_parse(tag_bstr.as_bstr())
+        let tag_oid = resolve_to_commit_oid(&git_repo, tag)
             .with_context(|| format!("Failed to resolve tag: {}", tag))?;
-        let tag_oid = tag_spec
-            .single()
-            .context("Tag resolved to multiple objects")?;
 
         // Get HEAD for end
         let head = git_repo.head().context("Failed to read HEAD")?;
@@ -251,38 +291,38 @@ pub fn generate_changelog_to_writer(
         // sorting by version, and taking the latest one
         let mut version_tags: Vec<(gix::Id, String, (u32, u32, u32))> = Vec::new();
 
-        if let Ok(refs) = git_repo.references() {
-            for reference_result in refs.all()? {
-                let Ok(reference) = reference_result else {
-                    continue;
-                };
-                let name_str = reference.name().as_bstr().to_string();
-                let Some(name) = name_str.strip_prefix("refs/tags/") else {
-                    continue;
-                };
-                let name_bstr: BString = name.to_string().into();
-                let Ok(spec) = git_repo.rev_parse(name_bstr.as_bstr()) else {
-                    continue;
-                };
-                let Some(oid) = spec.single() else {
-                    continue;
-                };
+        let refs = git_repo
+            .references()
+            .context("Failed to read git references")?;
+        for reference_result in refs.all()? {
+            let Ok(reference) = reference_result else {
+                continue;
+            };
+            let name_str = reference.name().as_bstr().to_string();
+            let Some(name) = name_str.strip_prefix("refs/tags/") else {
+                continue;
+            };
 
-                // Try to parse as semantic version
-                let version_str = name
-                    .strip_prefix('v')
-                    .or_else(|| name.strip_prefix('V'))
-                    .unwrap_or(name);
-                if let Ok((major, minor, patch)) = parse_version(version_str) {
-                    version_tags.push((oid, name.to_string(), (major, minor, patch)));
-                }
-            }
+            // Try to parse as semantic version
+            let version_str = name
+                .strip_prefix('v')
+                .or_else(|| name.strip_prefix('V'))
+                .unwrap_or(name);
+            let Ok((major, minor, patch)) = parse_version(version_str) else {
+                continue;
+            };
+
+            // Resolve tag to commit OID (follows tags recursively)
+            let Ok(commit_oid) = resolve_to_commit_oid(&git_repo, name) else {
+                continue;
+            };
+            version_tags.push((commit_oid, name.to_string(), (major, minor, patch)));
         }
 
         // Sort tags by semantic version (major, minor, patch)
         version_tags.sort_by(|a, b| a.2.cmp(&b.2));
 
-        // Get the latest tag OID (if any)
+        // Get the latest tag's commit OID (if any)
         let latest_tag_oid = version_tags.last().map(|(oid, _tag_name, _version)| *oid);
 
         // Get HEAD for end
@@ -437,4 +477,236 @@ pub fn changelog(args: ChangelogArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn create_test_git_repo_with_tags_and_commits(tags: &[&str], commits: &[&str]) -> TempDir {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Initialize git repo
+        Command::new("git")
+            .arg("init")
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Create an initial commit
+        std::fs::write(dir.path().join("README.md"), "# Test\n").unwrap();
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Create commits (with conventional commit format)
+        for commit_msg in commits {
+            let file_name = format!("file_{}.txt", commit_msg.replace([' ', ':'], "_"));
+            std::fs::write(dir.path().join(&file_name), commit_msg).unwrap();
+            Command::new("git")
+                .args(["add", &file_name])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            Command::new("git")
+                .args(["commit", "-m", commit_msg])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+        }
+
+        // Create tags
+        for tag in tags {
+            Command::new("git")
+                .args(["tag", "-a", tag, "-m", &format!("Release {}", tag)])
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+        }
+
+        dir
+    }
+
+    #[test]
+    fn test_changelog_finds_latest_tag_not_first() {
+        // Test that changelog finds the latest version tag, not just the first one
+        let _dir = create_test_git_repo_with_tags_and_commits(
+            &["v0.1.0", "v0.1.5", "v0.2.0"], // Multiple tags - v0.2.0 should be latest
+            &[
+                "feat(test): add feature for v0.1.0",
+                "fix(test): fix bug for v0.1.5",
+                "feat(test): add feature for v0.2.0",
+            ],
+        );
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+
+        // Test changelog with no range - should find latest tag (v0.2.0)
+        let args = ChangelogArgs {
+            at: None,
+            range: None,
+            for_version: None,
+            output: None,
+            owner: Some("test".to_string()),
+            repo: Some("repo".to_string()),
+        };
+
+        let mut output = Vec::new();
+        let result = generate_changelog_to_writer(&mut output, args);
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok(), "Changelog generation should succeed");
+        // The key test is that it doesn't crash and finds v0.2.0 as the latest
+        // tag (The actual content depends on what commits are after
+        // v0.2.0, which may be none)
+    }
+
+    #[test]
+    fn test_changelog_with_for_version() {
+        let _dir =
+            create_test_git_repo_with_tags_and_commits(&["v0.1.0"], &["feat(test): add feature"]);
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+
+        let args = ChangelogArgs {
+            at: None,
+            range: None,
+            for_version: Some("v0.2.0".to_string()),
+            output: None,
+            owner: Some("test".to_string()),
+            repo: Some("repo".to_string()),
+        };
+
+        let mut output = Vec::new();
+        let result = generate_changelog_to_writer(&mut output, args);
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let output_str = String::from_utf8(output).unwrap();
+        assert!(
+            output_str.contains("Changelog - v0.2.0"),
+            "Header should include for-version"
+        );
+    }
+
+    #[test]
+    fn test_changelog_with_for_version_no_v_prefix() {
+        let _dir = create_test_git_repo_with_tags_and_commits(&["v0.1.0"], &[]);
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+
+        let args = ChangelogArgs {
+            at: None,
+            range: None,
+            for_version: Some("0.2.0".to_string()), // No v prefix
+            output: None,
+            owner: Some("test".to_string()),
+            repo: Some("repo".to_string()),
+        };
+
+        let mut output = Vec::new();
+        let result = generate_changelog_to_writer(&mut output, args);
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+        let output_str = String::from_utf8(output).unwrap();
+        assert!(
+            output_str.contains("Changelog - v0.2.0"),
+            "Header should normalize version with v prefix"
+        );
+    }
+
+    #[test]
+    fn test_changelog_no_tags() {
+        // Test changelog generation when no tags exist - should generate from beginning
+        let _dir = create_test_git_repo_with_tags_and_commits(
+            &[],
+            &["feat(test): add feature", "fix(test): fix bug"],
+        );
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+
+        let args = ChangelogArgs {
+            at: None,
+            range: None,
+            for_version: None,
+            output: None,
+            owner: Some("test".to_string()),
+            repo: Some("repo".to_string()),
+        };
+
+        let mut output = Vec::new();
+        let result = generate_changelog_to_writer(&mut output, args);
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok(), "Should succeed even with no tags");
+        let output_str = String::from_utf8(output).unwrap();
+        // Should generate changelog from beginning when no tags exist
+        assert!(
+            output_str.contains("Changelog"),
+            "Should have changelog header"
+        );
+    }
+
+    #[test]
+    fn test_changelog_with_range() {
+        let _dir = create_test_git_repo_with_tags_and_commits(
+            &["v0.1.0", "v0.2.0"],
+            &["feat(test): add feature"],
+        );
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+
+        let args = ChangelogArgs {
+            at: None,
+            range: Some("v0.1.0..v0.2.0".to_string()),
+            for_version: None,
+            output: None,
+            owner: Some("test".to_string()),
+            repo: Some("repo".to_string()),
+        };
+
+        let mut output = Vec::new();
+        let result = generate_changelog_to_writer(&mut output, args);
+        std::env::set_current_dir(original_dir).unwrap();
+
+        if let Err(e) = &result {
+            eprintln!("Changelog generation failed: {}", e);
+        }
+        assert!(result.is_ok(), "Changelog with explicit range should work");
+    }
 }

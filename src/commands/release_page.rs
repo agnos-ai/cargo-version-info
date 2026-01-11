@@ -191,8 +191,8 @@ fn generate_changelog(writer: &mut dyn Write, args: &ReleasePageArgs) -> Result<
     let changelog_args = crate::commands::ChangelogArgs {
         at: args.since_tag.clone(),
         range: args.range.clone(),
-        for_version: None, // Not used in release page context
-        output: None,      // We handle output ourselves
+        for_version: args.for_version.clone(), // Use same version as release page
+        output: None,                          // We handle output ourselves
         owner: args.owner.clone(),
         repo: args.repo.clone(),
     };
@@ -225,4 +225,175 @@ fn generate_changelog(writer: &mut dyn Write, args: &ReleasePageArgs) -> Result<
     write!(writer, "{}", cleaned_changelog)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn create_test_cargo_project() -> TempDir {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create Cargo.toml
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            r#"
+[package]
+name = "test-package"
+version = "1.0.0"
+description = "Test package"
+repository = "https://github.com/test/repo"
+"#,
+        )
+        .unwrap();
+
+        // Create src directory with minimal lib.rs
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("lib.rs"), "// Test library\n").unwrap();
+
+        // Initialize git repo
+        Command::new("git")
+            .arg("init")
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Create initial commit
+        std::fs::write(dir.path().join("README.md"), "# Test\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .args(["commit", "-m", "chore: initial commit"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        dir
+    }
+
+    #[tokio::test]
+    async fn test_release_page_with_for_version() {
+        let _dir = create_test_cargo_project();
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output_file.path().to_string_lossy().to_string();
+
+        let args = ReleasePageArgs {
+            since_tag: None,
+            range: None,
+            for_version: Some("v0.2.0".to_string()),
+            output: Some(output_path.clone()),
+            no_network: true, // Skip network requests for badges
+            owner: Some("test".to_string()),
+            repo: Some("repo".to_string()),
+        };
+
+        let result = release_page_async(args).await;
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok(), "Release page generation should succeed");
+
+        // Verify the output contains the for_version
+        let content = std::fs::read_to_string(output_path).unwrap();
+        assert!(
+            content.contains("test-package v0.2.0"),
+            "Header should include for_version"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_release_page_with_for_version_no_v_prefix() {
+        let _dir = create_test_cargo_project();
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output_file.path().to_string_lossy().to_string();
+
+        let args = ReleasePageArgs {
+            since_tag: None,
+            range: None,
+            for_version: Some("0.2.0".to_string()), // No v prefix
+            output: Some(output_path.clone()),
+            no_network: true,
+            owner: Some("test".to_string()),
+            repo: Some("repo".to_string()),
+        };
+
+        let result = release_page_async(args).await;
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok(), "Release page generation should succeed");
+
+        // Verify the output contains the normalized version
+        let content = std::fs::read_to_string(output_path).unwrap();
+        assert!(
+            content.contains("test-package v0.2.0"),
+            "Header should normalize version with v prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_release_page_without_for_version_uses_package_version() {
+        let _dir = create_test_cargo_project();
+        let dir_path = _dir.path().to_path_buf();
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir_path).unwrap();
+
+        let args = ReleasePageArgs {
+            since_tag: None,
+            range: None,
+            for_version: None, // Not specified - should use package version
+            output: None,
+            no_network: true,
+            owner: Some("test".to_string()),
+            repo: Some("repo".to_string()),
+        };
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output_file.path().to_string_lossy().to_string();
+
+        let mut args_with_output = args;
+        args_with_output.output = Some(output_path.clone());
+
+        let result = release_page_async(args_with_output).await;
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok(), "Release page generation should succeed");
+
+        // Verify the output uses package version from Cargo.toml
+        let content = std::fs::read_to_string(output_path).unwrap();
+        assert!(
+            content.contains("test-package v1.0.0"),
+            "Header should use package version from Cargo.toml when for_version not specified"
+        );
+    }
 }

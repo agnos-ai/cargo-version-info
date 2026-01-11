@@ -79,13 +79,17 @@ jobs:
           path: target
           key: ${{ runner.os }}-${{ matrix.rust }}-target-test-${{ hashFiles('**/Cargo.lock') }}
       - name: Run tests
-        run: cargo test
+        env:
+          TERM: dumb
+        run: cargo test -- --test-threads=1
       - name: Run doc tests
+        env:
+          TERM: dumb
         shell: bash
         run: |
           # Only run doc tests if the package has a library target
           if cargo metadata --format-version 1 --no-deps | grep -q '"lib"'; then
-            cargo test --doc
+            cargo test --doc -- --test-threads=1
           else
             echo "Skipping doc tests: package has no library target"
           fi
